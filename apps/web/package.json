@@ -1,0 +1,29 @@
+{
+  "name": "@hideseek/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner --host 0.0.0.0",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --configLoader runner --host 0.0.0.0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hideseek/shared": "workspace:*",
+    "@turf/turf": "^7.2.0",
+    "lucide-react": "^0.542.0",
+    "maplibre-gl": "^5.7.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "vite": "^7.1.4",
+    "vite-plugin-pwa": "^1.0.3"
+  }
+}

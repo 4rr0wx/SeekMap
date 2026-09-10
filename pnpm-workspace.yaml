@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+storeDir: .tmp/pnpm-store
+confirmModulesPurge: false
+
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true

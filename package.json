@@ -1,0 +1,30 @@
+{
+  "name": "hideseek-atlas",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @hideseek/shared build && concurrently -k -n server,web -c yellow,cyan \"pnpm --filter @hideseek/server dev\" \"pnpm --filter @hideseek/web dev\"",
+    "build": "pnpm --filter @hideseek/shared build && pnpm --filter @hideseek/web build && pnpm --filter @hideseek/server build",
+    "start": "pnpm --filter @hideseek/server start",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run --configLoader runner",
+    "test:watch": "vitest --configLoader runner",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@types/node": "^24.3.0",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.35.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.42.0",
+    "vitest": "^3.2.4"
+  }
+}

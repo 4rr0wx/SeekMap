@@ -1,0 +1,12 @@
+.git
+.github
+.tmp
+node_modules
+**/node_modules
+**/dist
+coverage
+data
+.env
+*.log
+playwright-report
+test-results
