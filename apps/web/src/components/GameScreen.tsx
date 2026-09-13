@@ -30,6 +30,7 @@ import {
 } from "@hideseek/shared";
 import { api, patch, post, remove } from "../api";
 import { GameMap, type MapLayers } from "./GameMap";
+import { MapLegendModal } from "./MapLegendModal";
 import { QuestionActivitySidebar, QuestionComposer, QuestionHistory } from "./QuestionPanel";
 
 interface Props {
@@ -42,7 +43,7 @@ interface Props {
   onError: (message: string | null) => void;
 }
 
-type Panel = "history" | "layers" | "data" | "game" | null;
+type Panel = "history" | "layers" | "data" | "game" | "legend" | null;
 type Interaction = "measure" | "marker" | "question-a" | "question-b" | null;
 
 function gameTimer(state: GameState, currentTime: Date): { label: string; value: string } {
@@ -276,8 +277,17 @@ export function GameScreen({
         </button>
         <button
           className="header-action"
+          onClick={() => setPanel("legend")}
+          aria-label="Map guide and legend"
+          title="Map guide and legend"
+        >
+          <CircleHelp size={20} />
+        </button>
+        <button
+          className="header-action"
           onClick={() => setPanel("layers")}
           aria-label="Map layers"
+          title="Map layers"
         >
           <Layers3 size={20} />
         </button>
@@ -316,6 +326,7 @@ export function GameScreen({
               setMeasurement([]);
             }}
             aria-label="Measure distance"
+            title="Measure distance"
           >
             <Ruler />
           </button>
@@ -324,6 +335,7 @@ export function GameScreen({
               className={interaction === "marker" ? "map-tool active" : "map-tool"}
               onClick={() => setInteraction(interaction === "marker" ? null : "marker")}
               aria-label="Place Seeker marker"
+              title="Place Seeker marker"
             >
               <MapPinPlus />
             </button>
@@ -332,8 +344,17 @@ export function GameScreen({
             className="map-tool"
             onClick={() => requestGps()}
             aria-label="Show my location locally"
+            title="Show my location locally"
           >
             <Crosshair />
+          </button>
+          <button
+            className="map-tool"
+            onClick={() => setPanel("legend")}
+            aria-label="Map guide and legend"
+            title="Map guide and legend"
+          >
+            <CircleHelp />
           </button>
         </div>
         {!localPosition && (
@@ -464,7 +485,15 @@ export function GameScreen({
         />
       )}
       {panel === "layers" && (
-        <LayerPanel layers={layers} setLayers={setLayers} onClose={() => setPanel(null)} />
+        <LayerPanel
+          layers={layers}
+          setLayers={setLayers}
+          onClose={() => setPanel(null)}
+          onOpenLegend={() => setPanel("legend")}
+        />
+      )}
+      {panel === "legend" && (
+        <MapLegendModal onClose={() => setPanel(null)} onOpenLayers={() => setPanel("layers")} />
       )}
       {panel === "data" && (
         <DataPanel
@@ -551,10 +580,12 @@ function LayerPanel({
   layers,
   setLayers,
   onClose,
+  onOpenLegend,
 }: {
   layers: MapLayers;
   setLayers: (layers: MapLayers) => void;
   onClose: () => void;
+  onOpenLegend: () => void;
 }) {
   const labels: Record<keyof MapLayers, string> = {
     possibleArea: "Possible Area",
@@ -586,6 +617,12 @@ function LayerPanel({
             </span>
           </label>
         ))}
+        <div className="layer-panel-footer">
+          <button type="button" className="button secondary wide" onClick={onOpenLegend}>
+            <CircleHelp size={16} />
+            Map guide & legend
+          </button>
+        </div>
       </section>
     </div>
   );

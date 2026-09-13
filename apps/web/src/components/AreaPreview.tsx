@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import * as turf from "@turf/turf";
 import type { PublicConfig, SearchAreaResult } from "@hideseek/shared";
+import { MAP_COLORS } from "../mapTheme";
 
 interface Props {
   area: SearchAreaResult;
@@ -48,13 +49,19 @@ export function AreaPreview({ area, config }: Props) {
             id: "selected-area-fill",
             type: "fill",
             source: "selected-area",
-            paint: { "fill-color": "#e6a93d", "fill-opacity": 0.25 },
+            paint: {
+              "fill-color": MAP_COLORS.possibleFill,
+              "fill-opacity": MAP_COLORS.possibleFillOpacity,
+            },
           },
           {
             id: "selected-area-line",
             type: "line",
             source: "selected-area",
-            paint: { "line-color": "#f4c66b", "line-width": 3 },
+            paint: {
+              "line-color": MAP_COLORS.possibleLine,
+              "line-width": MAP_COLORS.possibleLineWidth,
+            },
           },
         ],
       },

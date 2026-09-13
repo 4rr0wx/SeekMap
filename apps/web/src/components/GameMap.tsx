@@ -9,6 +9,7 @@ import {
   type MapFeatureCollection,
   type PublicConfig,
 } from "@hideseek/shared";
+import { MAP_COLORS } from "../mapTheme";
 
 export interface MapLayers {
   possibleArea: boolean;
@@ -244,37 +245,57 @@ export function GameMap({
         id: "boundary-fill",
         type: "fill",
         source: "boundary",
-        paint: { "fill-color": "#152522", "fill-opacity": 0.16 },
+        paint: {
+          "fill-color": MAP_COLORS.boundaryFill,
+          "fill-opacity": MAP_COLORS.boundaryFillOpacity,
+        },
       });
       map.addLayer({
         id: "boundary-line",
         type: "line",
         source: "boundary",
-        paint: { "line-color": "#314b45", "line-width": 3 },
+        paint: {
+          "line-color": MAP_COLORS.boundaryLine,
+          "line-width": MAP_COLORS.boundaryLineWidth,
+        },
       });
       map.addLayer({
         id: "possible-fill",
         type: "fill",
         source: "possible",
-        paint: { "fill-color": "#f5b942", "fill-opacity": 0.25 },
+        paint: {
+          "fill-color": MAP_COLORS.possibleFill,
+          "fill-opacity": MAP_COLORS.possibleFillOpacity,
+        },
       });
       map.addLayer({
         id: "possible-line",
         type: "line",
         source: "possible",
-        paint: { "line-color": "#e9952f", "line-width": 3 },
+        paint: {
+          "line-color": MAP_COLORS.possibleLine,
+          "line-width": MAP_COLORS.possibleLineWidth,
+        },
       });
       map.addLayer({
         id: "admin-line",
         type: "line",
         source: "admin",
-        paint: { "line-color": "#637f77", "line-width": 1.5, "line-dasharray": [2, 2] },
+        paint: {
+          "line-color": MAP_COLORS.adminLine,
+          "line-width": MAP_COLORS.adminLineWidth,
+          "line-dasharray": [...MAP_COLORS.adminLineDash],
+        },
       });
       map.addLayer({
         id: "transit-line",
         type: "line",
         source: "transit-lines",
-        paint: { "line-color": "#347e9b", "line-width": 2.5, "line-opacity": 0.8 },
+        paint: {
+          "line-color": MAP_COLORS.transitLine,
+          "line-width": MAP_COLORS.transitLineWidth,
+          "line-opacity": MAP_COLORS.transitLineOpacity,
+        },
       });
       map.addLayer({
         id: "question-fill",
@@ -285,18 +306,20 @@ export function GameMap({
           "fill-color": [
             "case",
             ["==", ["get", "artifactRole"], "answer-region"],
-            "#f5b942",
+            MAP_COLORS.questionAnswerFill,
             ["get", "selected"],
-            "#f06a47",
-            "#c35dbe",
+            MAP_COLORS.questionSelectedFill,
+            MAP_COLORS.questionDefaultFill,
           ],
           "fill-opacity": [
             "case",
             ["==", ["get", "artifactRole"], "candidate-region"],
-            0.08,
+            MAP_COLORS.questionCandidateFillOpacity,
             ["==", ["get", "artifactRole"], "answer-region"],
-            0.24,
-            0.14,
+            MAP_COLORS.questionAnswerFillOpacity,
+            ["get", "selected"],
+            MAP_COLORS.questionSelectedFillOpacity,
+            MAP_COLORS.questionDefaultFillOpacity,
           ],
         },
       });
@@ -307,12 +330,25 @@ export function GameMap({
         filter: [
           "all",
           ["!=", ["get", "artifactRole"], "decision-boundary"],
-          ["!=", ["get", "artifactRole"], "answer-region"],
           ["!=", ["get", "artifactRole"], "candidate-region"],
         ],
         paint: {
-          "line-color": ["case", ["get", "selected"], "#f06a47", "#8f4b91"],
-          "line-width": ["case", ["get", "selected"], 4, 2],
+          "line-color": [
+            "case",
+            ["==", ["get", "artifactRole"], "answer-region"],
+            MAP_COLORS.questionAnswerLine,
+            ["get", "selected"],
+            MAP_COLORS.questionSelectedLine,
+            MAP_COLORS.questionDefaultLine,
+          ],
+          "line-width": [
+            "case",
+            ["==", ["get", "artifactRole"], "answer-region"],
+            MAP_COLORS.questionAnswerLineWidth,
+            ["get", "selected"],
+            MAP_COLORS.questionSelectedLineWidth,
+            MAP_COLORS.questionDefaultLineWidth,
+          ],
         },
       });
       map.addLayer({
@@ -325,9 +361,9 @@ export function GameMap({
           ["literal", ["decision-boundary", "candidate-region"]],
         ],
         paint: {
-          "line-color": "#f5b942",
-          "line-width": 3,
-          "line-dasharray": [2, 2],
+          "line-color": MAP_COLORS.questionDividerLine,
+          "line-width": MAP_COLORS.questionDividerLineWidth,
+          "line-dasharray": [...MAP_COLORS.questionDividerDash],
         },
       });
       map.addLayer({
@@ -336,20 +372,37 @@ export function GameMap({
         source: "questions",
         filter: ["==", ["geometry-type"], "Point"],
         paint: {
-          "circle-radius": ["case", ["==", ["get", "artifactRole"], "dataset-place"], 4, 7],
+          "circle-radius": [
+            "case",
+            ["==", ["get", "artifactRole"], "dataset-place"],
+            MAP_COLORS.datasetPointRadius,
+            MAP_COLORS.pointRadius,
+          ],
           "circle-color": [
             "case",
             ["==", ["get", "artifactRole"], "thermometer-start"],
-            "#347e9b",
+            MAP_COLORS.pointStartA,
             ["==", ["get", "artifactRole"], "thermometer-end"],
-            "#f06a47",
+            MAP_COLORS.pointEndB,
             ["==", ["get", "artifactRole"], "seeker-reference"],
-            "#f5b942",
-            "#c35dbe",
+            MAP_COLORS.pointStartA,
+            ["==", ["get", "artifactRole"], "dataset-place"],
+            MAP_COLORS.datasetPoint,
+            MAP_COLORS.questionDefaultLine,
           ],
-          "circle-opacity": ["case", ["==", ["get", "artifactRole"], "dataset-place"], 0.65, 1],
-          "circle-stroke-color": "#fff5df",
-          "circle-stroke-width": 2,
+          "circle-opacity": ["case", ["==", ["get", "artifactRole"], "dataset-place"], 0.85, 1],
+          "circle-stroke-color": [
+            "case",
+            ["==", ["get", "artifactRole"], "dataset-place"],
+            MAP_COLORS.datasetPointStroke,
+            MAP_COLORS.pointStartAStroke,
+          ],
+          "circle-stroke-width": [
+            "case",
+            ["==", ["get", "artifactRole"], "dataset-place"],
+            MAP_COLORS.datasetPointStrokeWidth,
+            MAP_COLORS.pointStrokeWidth,
+          ],
         },
       });
       map.addLayer({
@@ -357,33 +410,39 @@ export function GameMap({
         type: "circle",
         source: "transit-stations",
         paint: {
-          "circle-radius": 5,
-          "circle-color": "#f5f2e8",
-          "circle-stroke-color": "#246880",
-          "circle-stroke-width": 2,
+          "circle-radius": MAP_COLORS.stationRadius,
+          "circle-color": MAP_COLORS.stationFill,
+          "circle-stroke-color": MAP_COLORS.stationStroke,
+          "circle-stroke-width": MAP_COLORS.stationStrokeWidth,
         },
       });
       map.addLayer({
         id: "dataset-fill",
         type: "fill",
         source: "datasets",
-        paint: { "fill-color": "#347e9b", "fill-opacity": 0.18 },
+        paint: {
+          "fill-color": MAP_COLORS.datasetFill,
+          "fill-opacity": MAP_COLORS.datasetFillOpacity,
+        },
       });
       map.addLayer({
         id: "dataset-line",
         type: "line",
         source: "datasets",
-        paint: { "line-color": "#347e9b", "line-width": 2 },
+        paint: {
+          "line-color": MAP_COLORS.datasetLine,
+          "line-width": MAP_COLORS.datasetLineWidth,
+        },
       });
       map.addLayer({
         id: "dataset-point",
         type: "circle",
         source: "datasets",
         paint: {
-          "circle-radius": 5,
-          "circle-color": "#347e9b",
-          "circle-stroke-color": "#f5f2e8",
-          "circle-stroke-width": 1.5,
+          "circle-radius": MAP_COLORS.datasetPointRadius,
+          "circle-color": MAP_COLORS.datasetPoint,
+          "circle-stroke-color": MAP_COLORS.datasetPointStroke,
+          "circle-stroke-width": MAP_COLORS.datasetPointStrokeWidth,
         },
       });
       map.addLayer({
@@ -391,26 +450,35 @@ export function GameMap({
         type: "circle",
         source: "markers",
         paint: {
-          "circle-radius": 7,
-          "circle-color": "#f06a47",
-          "circle-stroke-color": "#fff5df",
-          "circle-stroke-width": 2,
+          "circle-radius": MAP_COLORS.seekerMarkerRadius,
+          "circle-color": MAP_COLORS.seekerMarkerFill,
+          "circle-stroke-color": MAP_COLORS.seekerMarkerStroke,
+          "circle-stroke-width": MAP_COLORS.seekerMarkerStrokeWidth,
         },
       });
       map.addLayer({
         id: "measurement-line",
         type: "line",
         source: "measurement",
-        paint: { "line-color": "#f06a47", "line-width": 4, "line-dasharray": [2, 1] },
+        paint: {
+          "line-color": MAP_COLORS.measurementLine,
+          "line-width": MAP_COLORS.measurementLineWidth,
+          "line-dasharray": [...MAP_COLORS.measurementLineDash],
+        },
       });
       map.addLayer({
         id: "question-draft-point",
         type: "circle",
         source: "question-draft-point",
         paint: {
-          "circle-radius": 9,
-          "circle-color": ["case", ["==", ["get", "draftTarget"], "A"], "#347e9b", "#f06a47"],
-          "circle-stroke-color": "#fff5df",
+          "circle-radius": 9.5,
+          "circle-color": [
+            "case",
+            ["==", ["get", "draftTarget"], "A"],
+            MAP_COLORS.pointStartA,
+            MAP_COLORS.pointEndB,
+          ],
+          "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 3,
         },
       });
@@ -419,10 +487,10 @@ export function GameMap({
         type: "circle",
         source: "local-position",
         paint: {
-          "circle-radius": 8,
-          "circle-color": "#2786d1",
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 3,
+          "circle-radius": MAP_COLORS.localGpsRadius,
+          "circle-color": MAP_COLORS.localGpsFill,
+          "circle-stroke-color": MAP_COLORS.localGpsStroke,
+          "circle-stroke-width": MAP_COLORS.localGpsStrokeWidth,
         },
       });
       setData(map, "boundary", state.game.boundary);

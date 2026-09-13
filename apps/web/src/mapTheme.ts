@@ -1,0 +1,318 @@
+export const MAP_COLORS = {
+  // Game Boundary
+  boundaryFill: "#13221f",
+  boundaryFillOpacity: 0.14,
+  boundaryLine: "#3e5c54",
+  boundaryLineWidth: 2.5,
+
+  // Possible Area (Active Hider Search Zone) - Exclusive Signature Gold/Amber
+  possibleFill: "#f5b942",
+  possibleFillOpacity: 0.22,
+  possibleLine: "#d9921e",
+  possibleLineWidth: 3,
+
+  // Question Geometry: Active / Selected Question
+  questionSelectedFill: "#f06a47",
+  questionSelectedFillOpacity: 0.18,
+  questionSelectedLine: "#f06a47",
+  questionSelectedLineWidth: 3,
+
+  // Question Geometry: Answer Region
+  questionAnswerFill: "#ea580c",
+  questionAnswerFillOpacity: 0.2,
+  questionAnswerLine: "#ea580c",
+  questionAnswerLineWidth: 2.5,
+
+  // Question Geometry: Candidate Region (Drafting Radius / Places)
+  questionCandidateFill: "#f06a47",
+  questionCandidateFillOpacity: 0.08,
+  questionCandidateLine: "#f06a47",
+  questionCandidateLineWidth: 2,
+
+  // Question Geometry: Decision Boundary (Thermometer Bisector Divider Line)
+  questionDividerLine: "#f06a47",
+  questionDividerLineWidth: 3,
+  questionDividerDash: [4, 3],
+
+  // Question Geometry: Reference Lines (Between Points or Candidates)
+  questionReferenceLine: "#f06a47",
+  questionReferenceLineWidth: 2,
+  questionReferenceDash: [2, 2],
+
+  // Question Geometry: Inactive / Other Questions
+  questionDefaultFill: "#6366f1",
+  questionDefaultFillOpacity: 0.12,
+  questionDefaultLine: "#4f46e5",
+  questionDefaultLineWidth: 2,
+
+  // Interaction Points: Point A (Start / Colder / Seeker Reference)
+  pointStartA: "#38bdf8",
+  pointStartAStroke: "#ffffff",
+
+  // Interaction Points: Point B (End / Hotter / Target)
+  pointEndB: "#f06a47",
+  pointEndBStroke: "#ffffff",
+
+  // Interaction Points Sizing
+  pointRadius: 8.5,
+  pointStrokeWidth: 2.5,
+
+  // Transit Lines & Stations
+  transitLine: "#0284c7",
+  transitLineWidth: 2.5,
+  transitLineOpacity: 0.85,
+  stationFill: "#ffffff",
+  stationStroke: "#0284c7",
+  stationRadius: 4.5,
+  stationStrokeWidth: 2,
+
+  // Administrative Boundaries (Districts / Municipalities)
+  adminLine: "#64748b",
+  adminLineWidth: 1.5,
+  adminLineDash: [3, 3],
+
+  // Imported Datasets (Custom KML/KMZ Features) - Distinct Emerald
+  datasetFill: "#10b981",
+  datasetFillOpacity: 0.18,
+  datasetLine: "#059669",
+  datasetLineWidth: 2,
+  datasetPoint: "#10b981",
+  datasetPointStroke: "#ffffff",
+  datasetPointRadius: 5,
+  datasetPointStrokeWidth: 1.5,
+
+  // Seeker Markers (Strategic Pins) - Distinct Rose Red
+  seekerMarkerFill: "#f43f5e",
+  seekerMarkerStroke: "#ffffff",
+  seekerMarkerRadius: 7.5,
+  seekerMarkerStrokeWidth: 2.5,
+
+  // Measurement Tool
+  measurementLine: "#fb923c",
+  measurementLineWidth: 3.5,
+  measurementLineDash: [3, 2],
+
+  // Local GPS User Position
+  localGpsFill: "#2563eb",
+  localGpsStroke: "#ffffff",
+  localGpsRadius: 8,
+  localGpsStrokeWidth: 3,
+} as const;
+
+export type MapColorToken = keyof typeof MAP_COLORS;
+
+export interface LegendItem {
+  id: string;
+  label: string;
+  description: string;
+  type: "area" | "line" | "point";
+  swatch: {
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: number;
+    dashed?: boolean;
+    pointFill?: string;
+    pointStroke?: string;
+    glow?: boolean;
+  };
+}
+
+export interface LegendSection {
+  id: string;
+  title: string;
+  items: LegendItem[];
+}
+
+export const MAP_LEGEND_SECTIONS: LegendSection[] = [
+  {
+    id: "boundaries",
+    title: "Boundaries & Search Area",
+    items: [
+      {
+        id: "possible-area",
+        label: "Possible Area",
+        description:
+          "Active zone where the Hider can currently be located. Automatically narrows as questions are answered.",
+        type: "area",
+        swatch: {
+          fill: "rgba(245, 185, 66, 0.28)",
+          stroke: MAP_COLORS.possibleLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        id: "game-boundary",
+        label: "Game Boundary",
+        description: "The outer perimeter of the playable game area chosen during game setup.",
+        type: "area",
+        swatch: {
+          fill: "rgba(19, 34, 31, 0.22)",
+          stroke: MAP_COLORS.boundaryLine,
+          strokeWidth: 2,
+        },
+      },
+      {
+        id: "administrative",
+        label: "Administrative Boundaries",
+        description:
+          "First division borders (districts or municipalities) queried by First Division questions.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.adminLine,
+          strokeWidth: 2,
+          dashed: true,
+        },
+      },
+    ],
+  },
+  {
+    id: "questions",
+    title: "Question Geometry",
+    items: [
+      {
+        id: "active-question",
+        label: "Active Question Area",
+        description:
+          "The geographic area currently tested or kept by an answered question (e.g. radar radius or answer zone).",
+        type: "area",
+        swatch: {
+          fill: "rgba(240, 106, 71, 0.22)",
+          stroke: MAP_COLORS.questionSelectedLine,
+          strokeWidth: 2,
+        },
+      },
+      {
+        id: "decision-boundary",
+        label: "Decision Boundary",
+        description:
+          "Divider separating hotter and colder zones (Thermometer) or candidate cutoff radius.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.questionDividerLine,
+          strokeWidth: 2.5,
+          dashed: true,
+        },
+      },
+      {
+        id: "point-a",
+        label: "Point A (Start / Colder / Reference)",
+        description:
+          "Thermometer start point ('Colder'), Seeker reference position, or center point.",
+        type: "point",
+        swatch: {
+          pointFill: MAP_COLORS.pointStartA,
+          pointStroke: MAP_COLORS.pointStartAStroke,
+        },
+      },
+      {
+        id: "point-b",
+        label: "Point B (End / Hotter)",
+        description: "Thermometer end point ('Hotter') or secondary target point.",
+        type: "point",
+        swatch: {
+          pointFill: MAP_COLORS.pointEndB,
+          pointStroke: MAP_COLORS.pointEndBStroke,
+        },
+      },
+      {
+        id: "candidate-radius",
+        label: "Candidate Area / Radius",
+        description: "Preview zone while planning a question (such as tentacle search radius).",
+        type: "area",
+        swatch: {
+          fill: "rgba(240, 106, 71, 0.08)",
+          stroke: MAP_COLORS.questionCandidateLine,
+          strokeWidth: 1.5,
+          dashed: true,
+        },
+      },
+      {
+        id: "other-questions",
+        label: "Other Question Geometry",
+        description: "Geometry from unselected, inactive, or previously applied questions.",
+        type: "area",
+        swatch: {
+          fill: "rgba(99, 102, 241, 0.16)",
+          stroke: MAP_COLORS.questionDefaultLine,
+          strokeWidth: 1.5,
+        },
+      },
+    ],
+  },
+  {
+    id: "transit-datasets",
+    title: "Transit & Datasets",
+    items: [
+      {
+        id: "transit-lines",
+        label: "Transit Lines",
+        description: "Railway, tram, and subway lines loaded from OpenStreetMap.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.transitLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        id: "transit-stations",
+        label: "Transit Stations",
+        description: "Railway and transit stations located within the current Possible Area.",
+        type: "point",
+        swatch: {
+          pointFill: MAP_COLORS.stationFill,
+          pointStroke: MAP_COLORS.stationStroke,
+        },
+      },
+      {
+        id: "datasets",
+        label: "Imported Datasets",
+        description: "Custom landmarks, parks, and features uploaded via KML/KMZ files.",
+        type: "area",
+        swatch: {
+          fill: "rgba(16, 185, 129, 0.22)",
+          stroke: MAP_COLORS.datasetLine,
+          strokeWidth: 2,
+        },
+      },
+    ],
+  },
+  {
+    id: "markers-navigation",
+    title: "Markers & Tools",
+    items: [
+      {
+        id: "seeker-markers",
+        label: "Seeker Pins",
+        description: "Strategic notes and suspect locations pinned by the Seeker team.",
+        type: "point",
+        swatch: {
+          pointFill: MAP_COLORS.seekerMarkerFill,
+          pointStroke: MAP_COLORS.seekerMarkerStroke,
+        },
+      },
+      {
+        id: "measurement",
+        label: "Distance Measurement",
+        description: "Straight-line distance between two points measured with the ruler tool.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.measurementLine,
+          strokeWidth: 3,
+          dashed: true,
+        },
+      },
+      {
+        id: "my-location",
+        label: "My Location (GPS)",
+        description:
+          "Your current GPS position. Kept strictly local to your browser and never sent to the server.",
+        type: "point",
+        swatch: {
+          pointFill: MAP_COLORS.localGpsFill,
+          pointStroke: MAP_COLORS.localGpsStroke,
+          glow: true,
+        },
+      },
+    ],
+  },
+];
