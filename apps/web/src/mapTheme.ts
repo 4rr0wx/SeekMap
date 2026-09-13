@@ -390,6 +390,31 @@ export function processQuestionFeatures(
                 ...(feature.properties ?? {}),
               },
             } as MapFeature);
+
+            try {
+              const clippedLine = turf.polygonToLine(clipped as Feature<Polygon | MultiPolygon>);
+              if (clippedLine) {
+                if (clippedLine.type === "FeatureCollection") {
+                  for (const f of clippedLine.features) {
+                    result.push({
+                      ...f,
+                      properties: {
+                        ...(feature.properties ?? {}),
+                      },
+                    } as MapFeature);
+                  }
+                } else {
+                  result.push({
+                    ...clippedLine,
+                    properties: {
+                      ...(feature.properties ?? {}),
+                    },
+                  } as MapFeature);
+                }
+              }
+            } catch {
+              // Ignore clipped line generation failure
+            }
           }
         } catch {
           result.push(feature);

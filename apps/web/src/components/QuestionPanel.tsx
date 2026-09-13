@@ -39,6 +39,8 @@ interface ComposerProps extends CommonProps {
   onPickFromMap: (target: "A" | "B") => void;
   onRequestGps: (target: "A" | "B") => void;
   onPreviewChange: (geometry: MapFeatureCollection | MapFeature | null) => void;
+  onSelect?: (id: string) => void;
+  onPointPicked?: (target: "A" | "B", point: [number, number]) => void;
   onClose: () => void;
 }
 
@@ -96,6 +98,8 @@ export function QuestionComposer({
   onPickFromMap,
   onRequestGps,
   onPreviewChange,
+  onSelect,
+  onPointPicked,
   onClose,
 }: ComposerProps) {
   const [definitionId, setDefinitionId] = useState(question?.definitionId ?? "radar.standard");
@@ -125,21 +129,27 @@ export function QuestionComposer({
     ? calculateQuestionCost(questionConfig.baseCost, previousUses + 1, questionConfig.repeatRule)
     : null;
 
-  function currentParameters(): Record<string, unknown> | null {
-    if (!pointA || (definition.parameterKind === "THERMOMETER" && !pointB)) return null;
-    if (definition.parameterKind === "RADAR") return { center: pointA, radiusMeters };
-    if (definition.parameterKind === "THERMOMETER") return { start: pointA, end: pointB };
-    if (definition.parameterKind === "POINT") return { referencePoint: pointA };
+  const effectivePointA = pickedPoint?.target === "A" ? pickedPoint.point : pointA;
+  const effectivePointB = pickedPoint?.target === "B" ? pickedPoint.point : pointB;
+
+  function currentParameters(
+    pA = effectivePointA,
+    pB = effectivePointB,
+  ): Record<string, unknown> | null {
+    if (!pA || (definition.parameterKind === "THERMOMETER" && !pB)) return null;
+    if (definition.parameterKind === "RADAR") return { center: pA, radiusMeters };
+    if (definition.parameterKind === "THERMOMETER") return { start: pA, end: pB };
+    if (definition.parameterKind === "POINT") return { referencePoint: pA };
     if (definition.category === "TENTACLES") {
       return {
-        referencePoint: pointA,
+        referencePoint: pA,
         radiusMeters,
         ...(datasetId ? { datasetId } : {}),
         ...(note ? { note } : {}),
       };
     }
     return {
-      referencePoint: pointA,
+      referencePoint: pA,
       ...(datasetId ? { datasetId } : {}),
       ...(note ? { note } : {}),
     };
@@ -152,7 +162,7 @@ export function QuestionComposer({
   }, [pickedPoint]);
 
   useEffect(() => {
-    const parameters = currentParameters();
+    const parameters = currentParameters(effectivePointA, effectivePointB);
     if (!parameters || (definition.parameterKind === "DATASET" && !datasetId)) {
       onPreviewChange(null);
       return;
@@ -167,17 +177,29 @@ export function QuestionComposer({
     } catch {
       onPreviewChange(null);
     }
-  }, [definitionId, pointA, pointB, radiusMeters, datasetId, note, state, onPreviewChange]);
+  }, [
+    definitionId,
+    effectivePointA,
+    effectivePointB,
+    radiusMeters,
+    datasetId,
+    note,
+    state,
+    onPreviewChange,
+  ]);
 
   function useGps(target: "A" | "B") {
     if (!localPosition) return onRequestGps(target);
     if (target === "A") setPointA(localPosition);
     else setPointB(localPosition);
+    onPointPicked?.(target, localPosition);
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!pointA || (definition.parameterKind === "THERMOMETER" && !pointB)) {
+    const currentA = effectivePointA;
+    const currentB = effectivePointB;
+    if (!currentA || (definition.parameterKind === "THERMOMETER" && !currentB)) {
       onError("Select the required point on the map first.");
       return;
     }
@@ -185,11 +207,22 @@ export function QuestionComposer({
       onError("Choose the place dataset for this question.");
       return;
     }
-    const parameters = currentParameters()!;
+    const parameters = currentParameters(currentA, currentB)!;
     setBusy(true);
     try {
-      if (question) await patch(`/api/questions/${question.id}`, { parameters }, token);
-      else await post("/api/questions", { definitionId, parameters }, token);
+      if (question) {
+        await patch(`/api/questions/${question.id}`, { parameters }, token);
+        onSelect?.(question.id);
+      } else {
+        const response = await post<{ id: string }>(
+          "/api/questions",
+          { definitionId, parameters },
+          token,
+        );
+        if (response?.id) {
+          onSelect?.(response.id);
+        }
+      }
       onError(null);
       onClose();
       void refresh();
@@ -200,10 +233,12 @@ export function QuestionComposer({
     }
   }
 
-  if (pickingFromMap) return null;
-
   return (
-    <aside className="question-sidebar sheet composer" aria-labelledby="question-title">
+    <aside
+      className="question-sidebar sheet composer"
+      aria-labelledby="question-title"
+      style={pickingFromMap ? { display: "none" } : undefined}
+    >
       <div className="sheet-header">
         <div>
           <p className="eyebrow">Draft planning</p>
@@ -262,7 +297,7 @@ export function QuestionComposer({
                   ? "Tentacle centre"
                   : "Reference point"
           }
-          point={pointA}
+          point={effectivePointA}
           onMap={() => onPickFromMap("A")}
           onGps={() => useGps("A")}
         />
@@ -283,7 +318,7 @@ export function QuestionComposer({
           <>
             <PointPicker
               label="End point"
-              point={pointB}
+              point={effectivePointB}
               onMap={() => onPickFromMap("B")}
               onGps={() => useGps("B")}
             />
@@ -343,7 +378,11 @@ export function QuestionComposer({
           </button>
           <button
             className="button primary"
-            disabled={busy || !pointA || (definition.parameterKind === "THERMOMETER" && !pointB)}
+            disabled={
+              busy ||
+              !effectivePointA ||
+              (definition.parameterKind === "THERMOMETER" && !effectivePointB)
+            }
           >
             {question ? "Save changes" : "Create draft"}
           </button>

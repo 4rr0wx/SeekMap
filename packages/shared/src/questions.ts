@@ -143,8 +143,20 @@ const radar: QuestionDefinition<z.infer<typeof radarParametersSchema>> = {
   repeatRule: { type: "LINEAR", increment: 1 },
   buildArtifacts(parameters, answer) {
     const circle = radarCircle(parameters.center, parameters.radiusMeters);
+    const centerPoint = turf.point(parameters.center, {
+      artifactRole: "seeker-reference",
+      label: "Radar centre",
+    });
+    circle.properties = {
+      ...(circle.properties ?? {}),
+      artifactRole: answer ? "answer-region" : "candidate-region",
+      ...(answer ? { answer } : {}),
+    };
     return {
-      visualization: circle,
+      visualization: turf.featureCollection([
+        circle,
+        centerPoint,
+      ] as MapFeature[]) as MapFeatureCollection,
       effect: answer
         ? { mode: answer === "INSIDE" ? "INTERSECT" : "SUBTRACT", geometry: circle }
         : null,

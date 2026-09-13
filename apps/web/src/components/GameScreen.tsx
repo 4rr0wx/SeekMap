@@ -464,6 +464,10 @@ export function GameScreen({
             onPickFromMap={(target) => setInteraction(target === "A" ? "question-a" : "question-b")}
             onRequestGps={requestGps}
             onPreviewChange={setDraftQuestionGeometry}
+            onSelect={setSelectedQuestionId}
+            onPointPicked={(target, point) =>
+              setDraftQuestionPoints((curr) => ({ ...curr, [target]: point }))
+            }
             onClose={() => {
               setComposer({ open: false, question: null });
               setPickedQuestionPoint(null);
