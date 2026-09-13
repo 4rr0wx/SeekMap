@@ -7,6 +7,7 @@ import {
   evaluateQuestionAtPosition,
   getQuestionAnswers,
   getQuestionDefinition,
+  getQuestionReferenceInfo,
   normalizeArea,
   recomputePossibleArea,
   thermometerDivider,
@@ -267,6 +268,19 @@ describe("area geometry", () => {
     expect(matchEvaluation?.answer).toBe("DIFFERENT");
     expect(matchEvaluation?.details.join(" ")).toContain("East Golf Club");
 
+    const matchWithoutLocation = evaluateQuestionAtPosition(
+      "matching.dataset",
+      parameters,
+      null,
+      context,
+    );
+    expect(matchWithoutLocation?.answer).toBeNull();
+    expect(matchWithoutLocation?.summary).toBe("Location needed to check this answer.");
+    expect(matchWithoutLocation?.details).toEqual(["Seeker: West Golf Club"]);
+
+    const refInfo = getQuestionReferenceInfo("matching.dataset", parameters, context);
+    expect(refInfo?.placeName).toBe("West Golf Club");
+
     const closer = buildQuestionArtifacts(
       "measuring.dataset",
       parameters,
@@ -282,6 +296,19 @@ describe("area geometry", () => {
     );
     expect(measuringEvaluation?.answer).toBe("CLOSER");
     expect(measuringEvaluation?.summary).toContain("closer");
+
+    const measuringWithoutLocation = evaluateQuestionAtPosition(
+      "measuring.dataset",
+      parameters,
+      null,
+      context,
+    );
+    expect(measuringWithoutLocation?.answer).toBeNull();
+    expect(measuringWithoutLocation?.summary).toBe("Location needed to check this answer.");
+    expect(measuringWithoutLocation?.details[0]).toContain("Seeker: West Golf Club");
+
+    const measuringRefInfo = getQuestionReferenceInfo("measuring.dataset", parameters, context);
+    expect(measuringRefInfo?.placeName).toBe("West Golf Club");
   });
 
   it("builds Tentacles Voronoi cells, radius exclusion, and local Hider evaluation", () => {
@@ -364,6 +391,69 @@ describe("area geometry", () => {
     );
     expect(evalOutside?.answer).toBe("OUTSIDE");
     expect(evalOutside?.summary).toContain("outside the tentacle radius");
+  });
+
+  it("evaluates matching.first-division and radar with and without local position", () => {
+    const subdivisions = turf.featureCollection([
+      turf.polygon(
+        [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 2],
+            [0, 2],
+            [0, 0],
+          ],
+        ],
+        { name: "West District" },
+      ),
+      turf.polygon(
+        [
+          [
+            [1, 0],
+            [2, 0],
+            [2, 2],
+            [1, 2],
+            [1, 0],
+          ],
+        ],
+        { name: "East District" },
+      ),
+    ]);
+    const divContext = { boundary, subdivisions, datasets: [] };
+    const divParams = { referencePoint: [0.5, 1] };
+
+    const divWithLocation = evaluateQuestionAtPosition(
+      "matching.first-division",
+      divParams,
+      [1.5, 1],
+      divContext,
+    );
+    expect(divWithLocation?.answer).toBe("DIFFERENT");
+    expect(divWithLocation?.details).toEqual(["Seeker: West District", "You: East District"]);
+
+    const divWithoutLocation = evaluateQuestionAtPosition(
+      "matching.first-division",
+      divParams,
+      null,
+      divContext,
+    );
+    expect(divWithoutLocation?.answer).toBeNull();
+    expect(divWithoutLocation?.summary).toBe("Location needed to check this answer.");
+    expect(divWithoutLocation?.details).toEqual(["Seeker: West District"]);
+
+    const divRefInfo = getQuestionReferenceInfo("matching.first-division", divParams, divContext);
+    expect(divRefInfo?.divisionName).toBe("West District");
+
+    const radarWithoutLocation = evaluateQuestionAtPosition(
+      "radar.standard",
+      { center: [1, 1], radiusMeters: 5000 },
+      null,
+      divContext,
+    );
+    expect(radarWithoutLocation?.answer).toBeNull();
+    expect(radarWithoutLocation?.summary).toBe("Location needed to check this answer.");
+    expect(radarWithoutLocation?.details).toEqual(["Radius: 5.00 km"]);
   });
 
   it("handles a MultiPolygon game boundary", () => {

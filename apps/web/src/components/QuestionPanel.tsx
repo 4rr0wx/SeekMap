@@ -16,6 +16,7 @@ import {
   evaluateQuestionAtPosition,
   getQuestionAnswers,
   getQuestionDefinition,
+  getQuestionReferenceInfo,
   QUESTION_DEFINITIONS,
   type GameState,
   type MapFeature,
@@ -144,6 +145,19 @@ export function QuestionComposer({
       ...(note ? { note } : {}),
     };
   }
+
+  const composerReferenceInfo =
+    pointA && datasetId
+      ? getQuestionReferenceInfo(
+          definitionId,
+          { referencePoint: pointA, datasetId },
+          {
+            boundary: state.game.boundary,
+            subdivisions: state.game.subdivisions,
+            datasets: state.datasets,
+          },
+        )
+      : null;
 
   useEffect(() => {
     if (!pickedPoint) return;
@@ -326,6 +340,11 @@ export function QuestionComposer({
                 inside the game boundary.
               </p>
             ) : null}
+            {composerReferenceInfo?.placeName && (
+              <p className="field-help">
+                <strong>Nearest place:</strong> {composerReferenceInfo.placeName}
+              </p>
+            )}
             <label>
               Rule note (optional)
               <textarea
@@ -417,8 +436,13 @@ export function QuestionActivitySidebar({
             datasets: state.datasets,
           };
           const answers = getQuestionAnswers(definition, question.parameters, questionContext);
+          const referenceInfo = getQuestionReferenceInfo(
+            question.definitionId,
+            question.parameters,
+            questionContext,
+          );
           let localEvaluation: ReturnType<typeof evaluateQuestionAtPosition> = null;
-          if (state.me.role === "HIDER" && localPosition && question.status === "PENDING") {
+          if (state.me.role === "HIDER" && question.status === "PENDING") {
             try {
               localEvaluation = evaluateQuestionAtPosition(
                 question.definitionId,
@@ -444,6 +468,17 @@ export function QuestionActivitySidebar({
               {dataset && (
                 <p className="dataset-callout">
                   <strong>Selected places:</strong> {dataset.name}
+                  {referenceInfo?.placeName && (
+                    <>
+                      <br />
+                      <strong>Seeker's nearest place:</strong> {referenceInfo.placeName}
+                    </>
+                  )}
+                </p>
+              )}
+              {!dataset && referenceInfo?.divisionName && (
+                <p className="dataset-callout">
+                  <strong>Seeker's division:</strong> {referenceInfo.divisionName}
                 </p>
               )}
               <p className="question-prompt">
@@ -455,27 +490,37 @@ export function QuestionActivitySidebar({
                       ? `Which nearby place in ${dataset.name} within the radius is the Hider closest to, or are they outside?`
                       : definition.description}
               </p>
-              {state.me.role === "HIDER" && question.status === "PENDING" && !localPosition && (
-                <div className="local-evaluation missing-location">
-                  <strong>Location needed to check this answer.</strong>
-                  <button className="button secondary small-button" onClick={onRequestGps}>
-                    Use my location
-                  </button>
-                </div>
-              )}
               {localEvaluation && (
-                <div className="local-evaluation">
+                <div className={`local-evaluation ${!localPosition ? "missing-location" : ""}`}>
                   <strong>{localEvaluation.summary}</strong>
                   {localEvaluation.details.map((detail) => (
                     <span key={detail}>{detail}</span>
                   ))}
-                  <span className="suggested-answer">
-                    Suggested answer:{" "}
-                    {answers.find((option) => option.value === localEvaluation.answer)?.label ??
-                      localEvaluation.answer}
-                  </span>
+                  {localEvaluation.answer && (
+                    <span className="suggested-answer">
+                      Suggested answer:{" "}
+                      {answers.find((option) => option.value === localEvaluation.answer)?.label ??
+                        localEvaluation.answer}
+                    </span>
+                  )}
+                  {!localPosition && (
+                    <button className="button secondary small-button" onClick={onRequestGps}>
+                      Use my location
+                    </button>
+                  )}
                 </div>
               )}
+              {!localEvaluation &&
+                state.me.role === "HIDER" &&
+                question.status === "PENDING" &&
+                !localPosition && (
+                  <div className="local-evaluation missing-location">
+                    <strong>Location needed to check this answer.</strong>
+                    <button className="button secondary small-button" onClick={onRequestGps}>
+                      Use my location
+                    </button>
+                  </div>
+                )}
               {question.answer && (
                 <p className="answer">
                   Answer:{" "}
@@ -647,6 +692,11 @@ export function QuestionHistory({
               datasets: state.datasets,
             };
             const answers = getQuestionAnswers(definition, question.parameters, questionContext);
+            const referenceInfo = getQuestionReferenceInfo(
+              question.definitionId,
+              question.parameters,
+              questionContext,
+            );
             return (
               <article
                 key={question.id}
@@ -683,6 +733,11 @@ export function QuestionHistory({
                         timeStyle: "short",
                       })}`
                     : ""}
+                  {referenceInfo?.placeName
+                    ? ` · Seeker: ${referenceInfo.placeName}`
+                    : referenceInfo?.divisionName
+                      ? ` · Seeker: ${referenceInfo.divisionName}`
+                      : ""}
                   {question.status === "APPLIED"
                     ? question.enabled
                       ? " · affects Possible Area"
