@@ -1,6 +1,11 @@
 import * as turf from "@turf/turf";
 import type { Feature, Polygon, MultiPolygon } from "geojson";
-import { intersectAreas, type AreaFeature, type MapFeature } from "@hideseek/shared";
+import {
+  intersectAreas,
+  type AreaFeature,
+  type MapFeature,
+  type QuestionInstance,
+} from "@hideseek/shared";
 
 export const MAP_COLORS = {
   // Game Boundary
@@ -423,4 +428,16 @@ export function processQuestionFeatures(
   }
 
   return result;
+}
+
+export function filterVisibleQuestions(
+  questions: QuestionInstance[],
+  selectedQuestionId: string | null,
+): QuestionInstance[] {
+  return questions.filter(
+    (question) =>
+      question.enabled &&
+      question.visualization &&
+      (!selectedQuestionId ? question.status !== "APPLIED" : question.id === selectedQuestionId),
+  );
 }

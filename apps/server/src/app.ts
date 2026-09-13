@@ -49,8 +49,13 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
     trustProxy: true,
     bodyLimit: Math.max(config.maxUploadBytes, 1_048_576),
   });
-  app.addHook("onSend", async (_request, reply, payload) => {
+  app.addHook("onSend", async (request, reply, payload) => {
     reply.header("Permissions-Policy", "geolocation=(self)");
+    if (request.url.startsWith("/api/")) {
+      reply.header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      reply.header("Pragma", "no-cache");
+      reply.header("Expires", "0");
+    }
     return payload;
   });
   await app.register(compress, { threshold: 1_024 });
