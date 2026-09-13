@@ -1,7 +1,12 @@
 import * as turf from "@turf/turf";
-import type { AreaFeature, MapFeature } from "@hideseek/shared";
+import type { AreaFeature, MapFeature, QuestionInstance } from "@hideseek/shared";
 import { describe, expect, it } from "vitest";
-import { MAP_COLORS, MAP_LEGEND_SECTIONS, processQuestionFeatures } from "./mapTheme";
+import {
+  MAP_COLORS,
+  MAP_LEGEND_SECTIONS,
+  filterVisibleQuestions,
+  processQuestionFeatures,
+} from "./mapTheme";
 
 describe("MAP_COLORS", () => {
   it("defines valid hex colors for all color properties", () => {
@@ -189,5 +194,122 @@ describe("processQuestionFeatures", () => {
 
     const processed = processQuestionFeatures([point, line], searchArea);
     expect(processed).toEqual([point, line]);
+  });
+});
+
+describe("filterVisibleQuestions", () => {
+  const mockVisualization = turf.polygon([
+    [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+      [0, 0],
+    ],
+  ]) as MapFeature;
+
+  const appliedQuestion: QuestionInstance = {
+    id: "q-applied",
+    definitionId: "radar.standard",
+    category: "RADAR",
+    displayName: "Radar 1",
+    status: "APPLIED",
+    parameters: {},
+    answer: "OUTSIDE",
+    visualization: mockVisualization,
+    effect: null,
+    enabled: true,
+    askedByPlayerId: "p1",
+    askedByName: "Seeker",
+    usageNumber: 1,
+    cost: 1,
+    askedAt: new Date().toISOString(),
+    answeredAt: new Date().toISOString(),
+    appliedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const pendingQuestion: QuestionInstance = {
+    id: "q-pending",
+    definitionId: "thermometer.standard",
+    category: "THERMOMETER",
+    displayName: "Thermometer 1",
+    status: "PENDING",
+    parameters: {},
+    answer: null,
+    visualization: mockVisualization,
+    effect: null,
+    enabled: true,
+    askedByPlayerId: "p1",
+    askedByName: "Seeker",
+    usageNumber: 1,
+    cost: 1,
+    askedAt: new Date().toISOString(),
+    answeredAt: null,
+    appliedAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const answeredQuestion: QuestionInstance = {
+    id: "q-answered",
+    definitionId: "matching.first-division",
+    category: "MATCHING",
+    displayName: "Division 1",
+    status: "ANSWERED",
+    parameters: {},
+    answer: "SAME",
+    visualization: mockVisualization,
+    effect: null,
+    enabled: true,
+    askedByPlayerId: "p1",
+    askedByName: "Seeker",
+    usageNumber: 1,
+    cost: 1,
+    askedAt: new Date().toISOString(),
+    answeredAt: new Date().toISOString(),
+    appliedAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  it("excludes APPLIED questions when no question is selected, preventing stale overlays on the hiding zone", () => {
+    const questions = [appliedQuestion, pendingQuestion, answeredQuestion];
+    const visible = filterVisibleQuestions(questions, null);
+
+    // Only active (PENDING or ANSWERED) questions should be in the question layer
+    expect(visible.map((q) => q.id)).toEqual(["q-pending", "q-answered"]);
+    expect(visible.some((q) => q.id === "q-applied")).toBe(false);
+  });
+
+  it("excludes disabled questions or questions without visualization even if active", () => {
+    const disabledPending: QuestionInstance = {
+      ...pendingQuestion,
+      id: "q-disabled",
+      enabled: false,
+    };
+    const noVisPending: QuestionInstance = {
+      ...pendingQuestion,
+      id: "q-novis",
+      visualization: null,
+    };
+
+    const visible = filterVisibleQuestions([disabledPending, noVisPending], null);
+    expect(visible).toEqual([]);
+  });
+
+  it("includes an APPLIED question when explicitly selected (e.g. inspected from history)", () => {
+    const questions = [appliedQuestion, pendingQuestion];
+    const visible = filterVisibleQuestions(questions, "q-applied");
+
+    expect(visible.map((q) => q.id)).toEqual(["q-applied"]);
+  });
+
+  it("only includes the selected question when a specific question is selected", () => {
+    const questions = [appliedQuestion, pendingQuestion, answeredQuestion];
+    const visible = filterVisibleQuestions(questions, "q-pending");
+
+    expect(visible.map((q) => q.id)).toEqual(["q-pending"]);
   });
 });

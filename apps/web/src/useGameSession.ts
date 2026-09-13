@@ -88,12 +88,27 @@ export function useGameSession() {
   }, [refresh]);
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
     if (!identity || !state) return;
     const socket: Socket = io({
       auth: { token: identity.token },
       transports: ["websocket", "polling"],
     });
-    socket.on("connect", () => setConnected(true));
+    socket.on("connect", () => {
+      setConnected(true);
+      void refresh();
+    });
     socket.on("disconnect", () => setConnected(false));
     socket.on("state:changed", () => {
       if (refreshInFlight.current) refreshQueued.current = true;

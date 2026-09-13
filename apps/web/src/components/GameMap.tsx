@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
 import * as turf from "@turf/turf";
 import type { Feature, FeatureCollection, Geometry, Point } from "geojson";
@@ -9,7 +9,7 @@ import {
   type MapFeatureCollection,
   type PublicConfig,
 } from "@hideseek/shared";
-import { MAP_COLORS, processQuestionFeatures } from "../mapTheme";
+import { MAP_COLORS, filterVisibleQuestions, processQuestionFeatures } from "../mapTheme";
 
 export interface MapLayers {
   possibleArea: boolean;
@@ -81,6 +81,7 @@ export function GameMap({
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const onClickRef = useRef(onMapClick);
   const layersRef = useRef(layers);
   onClickRef.current = onMapClick;
@@ -115,13 +116,7 @@ export function GameMap({
   const questionGeometry = useMemo(() => {
     const persisted = draftQuestionActive
       ? []
-      : state.questions
-          .filter(
-            (question) =>
-              question.enabled &&
-              question.visualization &&
-              (!selectedQuestionId || question.id === selectedQuestionId),
-          )
+      : filterVisibleQuestions(state.questions, selectedQuestionId)
           .map((question) => {
             const visual = question.visualization;
             if (!visual) return null;
@@ -505,20 +500,6 @@ export function GameMap({
           "circle-stroke-width": MAP_COLORS.localGpsStrokeWidth,
         },
       });
-      setData(map, "boundary", state.game.boundary);
-      setData(map, "possible", state.game.possibleArea ?? empty);
-      setData(map, "questions", questionGeometry);
-      setData(map, "admin", state.game.subdivisions ?? empty);
-      setData(map, "transit-lines", state.game.transitLines ?? empty);
-      setData(map, "transit-stations", visibleStations);
-      setData(map, "datasets", importedDatasets);
-      setData(
-        map,
-        "markers",
-        collection((state.seekerMarkers ?? []).map((marker) => marker.position)),
-      );
-      setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
-      setData(map, "question-draft-point", liveDraftPoints);
       applyLayerVisibility(map, layersRef.current);
       const bounds = turf.bbox(state.game.boundary);
       map.fitBounds(
@@ -528,10 +509,12 @@ export function GameMap({
         ],
         { padding: 42, duration: 0 },
       );
+      setMapLoaded(true);
       map.fire("hideseek-ready");
     });
     map.on("click", (event) => onClickRef.current([event.lngLat.lng, event.lngLat.lat]));
     return () => {
+      setMapLoaded(false);
       map.remove();
       mapRef.current = null;
     };
@@ -539,7 +522,7 @@ export function GameMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
     setData(map, "boundary", state.game.boundary);
     setData(map, "possible", state.game.possibleArea ?? empty);
     setData(map, "questions", questionGeometry);
@@ -557,6 +540,7 @@ export function GameMap({
     setData(map, "measurement", measurement.length === 2 ? turf.lineString(measurement) : empty);
     applyLayerVisibility(map, layers);
   }, [
+    mapLoaded,
     state,
     layers,
     localPosition,

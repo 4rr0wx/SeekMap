@@ -105,6 +105,12 @@ describe("server game integrity", () => {
     expect(response.headers["permissions-policy"]).toBe("geolocation=(self)");
   });
 
+  it("sets Cache-Control no-store on api routes to prevent stale client state", async () => {
+    const { app } = await fixture();
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    expect(response.headers["cache-control"]).toContain("no-store");
+  });
+
   it("compresses full game snapshots", async () => {
     const { app } = await fixture();
     const { seeker } = await createAndJoin(app);
