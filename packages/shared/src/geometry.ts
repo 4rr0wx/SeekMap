@@ -56,7 +56,7 @@ export function radarCircle(center: [number, number], radiusMeters: number): Are
 
 const WEB_MERCATOR_RADIUS = 6_378_137;
 
-function projectToWebMercator(point: [number, number]): [number, number] {
+export function projectToWebMercator(point: [number, number]): [number, number] {
   const longitude = (point[0] * Math.PI) / 180;
   const latitude = (Math.max(-85, Math.min(85, point[1])) * Math.PI) / 180;
   return [
@@ -65,7 +65,7 @@ function projectToWebMercator(point: [number, number]): [number, number] {
   ];
 }
 
-function unprojectFromWebMercator(point: [number, number]): [number, number] {
+export function unprojectFromWebMercator(point: [number, number]): [number, number] {
   return [
     (point[0] / WEB_MERCATOR_RADIUS) * (180 / Math.PI),
     (2 * Math.atan(Math.exp(point[1] / WEB_MERCATOR_RADIUS)) - Math.PI / 2) * (180 / Math.PI),
@@ -105,11 +105,19 @@ function thermometerPlane(
   const bounds = turf.bbox(boundary);
   const projectedSouthWest = projectToWebMercator([bounds[0], bounds[1]]);
   const projectedNorthEast = projectToWebMercator([bounds[2], bounds[3]]);
+  const boundaryCenter: [number, number] = [
+    (projectedSouthWest[0] + projectedNorthEast[0]) / 2,
+    (projectedSouthWest[1] + projectedNorthEast[1]) / 2,
+  ];
   const boundarySpan = Math.hypot(
     projectedNorthEast[0] - projectedSouthWest[0],
     projectedNorthEast[1] - projectedSouthWest[1],
   );
-  const reach = Math.max(boundarySpan * 4, length * 4, 10_000);
+  const distFromMidpoint = Math.hypot(
+    midpoint[0] - boundaryCenter[0],
+    midpoint[1] - boundaryCenter[1],
+  );
+  const reach = Math.max(boundarySpan * 2 + distFromMidpoint, length * 2, 20_000);
   const offset = (origin: [number, number], vector: [number, number], amount: number) =>
     [origin[0] + vector[0] * amount, origin[1] + vector[1] * amount] as [number, number];
 
@@ -118,20 +126,36 @@ function thermometerPlane(
   const farStart = offset(dividerStart, targetDirection, reach * 2);
   const farEnd = offset(dividerEnd, targetDirection, reach * 2);
 
-  return {
-    divider: turf.lineString([
-      unprojectFromWebMercator(dividerStart),
-      unprojectFromWebMercator(dividerEnd),
-    ]),
-    targetHalfPlane: turf.polygon([
+  // Sample divider in Web Mercator space so that Turf's planar Euclidean clipping
+  // in WGS84 coordinates accurately preserves the Mercator divider line
+  // without bowing or shifting due to projection non-linearity over long distances.
+  const steps = Math.max(64, Math.min(256, Math.ceil((reach * 2) / 2000) * 2));
+  const dividerCoords: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const frac = i / steps;
+    dividerCoords.push(
+      unprojectFromWebMercator([
+        dividerStart[0] + frac * (dividerEnd[0] - dividerStart[0]),
+        dividerStart[1] + frac * (dividerEnd[1] - dividerStart[1]),
+      ]),
+    );
+  }
+
+  const targetHalfPlane = turf.rewind(
+    turf.polygon([
       [
-        unprojectFromWebMercator(dividerStart),
-        unprojectFromWebMercator(dividerEnd),
+        ...dividerCoords,
         unprojectFromWebMercator(farEnd),
         unprojectFromWebMercator(farStart),
-        unprojectFromWebMercator(dividerStart),
+        dividerCoords[0]!,
       ],
-    ]) as AreaFeature,
+    ]),
+    { mutate: true },
+  ) as AreaFeature;
+
+  return {
+    divider: turf.lineString(dividerCoords),
+    targetHalfPlane,
   };
 }
 

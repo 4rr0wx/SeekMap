@@ -662,6 +662,57 @@ describe("server game integrity", () => {
     expect(turf.area(removed.game.possibleArea!)).toBeCloseTo(originalArea, 2);
   });
 
+  it("runs the Thermometer lifecycle and accurately aligns Possible Area with midpoint", async () => {
+    const { app } = await fixture();
+    const { seeker, hider } = await createAndJoin(app, true);
+    const start: [number, number] = [16.37, 48.208];
+    const end: [number, number] = [16.385, 48.206];
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "thermometer.standard",
+        parameters: { start, end },
+      },
+    });
+    const id = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/answer`,
+      headers: auth(hider.token),
+      payload: { answer: "HOTTER" },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/apply`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const state = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(state.questions[0]?.status).toBe("APPLIED");
+    const possibleArea = state.game.possibleArea;
+    expect(possibleArea).not.toBeNull();
+    expect(turf.booleanPointInPolygon(turf.point(end), possibleArea!)).toBe(true);
+    expect(turf.booleanPointInPolygon(turf.point(start), possibleArea!)).toBe(false);
+
+    // Verify distance from midpoint to possibleArea boundary is sub-meter
+    const mid: [number, number] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+    const boundaryLine = turf.polygonToLine(possibleArea as any);
+    const dist = turf.pointToLineDistance(turf.point(mid), boundaryLine as any, {
+      units: "meters",
+    });
+    expect(dist).toBeLessThan(1);
+  });
+
   it("persists the active game and player session across a database restart", async () => {
     const directory = mkdtempSync(join(tmpdir(), "hideseek-atlas-persist-"));
     const first = await fixture(directory);

@@ -11,6 +11,8 @@ import {
   recomputePossibleArea,
   thermometerDivider,
   thermometerRegion,
+  projectToWebMercator,
+  unprojectFromWebMercator,
   type AreaFeature,
   type UploadedDataset,
 } from "./index";
@@ -100,8 +102,10 @@ describe("area geometry", () => {
       ],
     ]) as AreaFeature;
     const divider = thermometerDivider(viennaBoundary, start, end);
-    const [dividerStart, dividerEnd] = divider.geometry.coordinates;
-    expect(dividerStart![0]!).toBeCloseTo(dividerEnd![0]!, 8);
+    const dividerStart = divider.geometry.coordinates[0]!;
+    const dividerEnd = divider.geometry.coordinates[divider.geometry.coordinates.length - 1]!;
+    expect(dividerStart[0]!).toBeCloseTo(dividerEnd[0]!, 8);
+    expect(divider.geometry.coordinates.length).toBeGreaterThan(2);
 
     const draft = buildQuestionArtifacts("thermometer.standard", { start, end }, null, {
       boundary: viennaBoundary,
@@ -128,6 +132,109 @@ describe("area geometry", () => {
     if (answered.visualization?.type === "FeatureCollection") {
       expect(answered.visualization.features[0]?.properties?.artifactRole).toBe("answer-region");
     }
+  });
+
+  it("aligns Thermometer divider and region boundaries at the midpoint for tilted angles", () => {
+    const viennaBoundary = turf.polygon([
+      [
+        [15.9, 47.9],
+        [16.7, 47.9],
+        [16.7, 48.5],
+        [15.9, 48.5],
+        [15.9, 47.9],
+      ],
+    ]) as AreaFeature;
+    const start: [number, number] = [16.37, 48.208];
+    const end: [number, number] = [16.385, 48.206];
+    const divider = thermometerDivider(viennaBoundary, start, end);
+    const hot = thermometerRegion(viennaBoundary, start, end, "END");
+    const cold = thermometerRegion(viennaBoundary, start, end, "START");
+
+    const projStart = projectToWebMercator(start);
+    const projEnd = projectToWebMercator(end);
+    const trueMidpoint = unprojectFromWebMercator([
+      (projStart[0] + projEnd[0]) / 2,
+      (projStart[1] + projEnd[1]) / 2,
+    ]);
+
+    // Distance from midpoint to the divider line should be sub-meter
+    const distDivider = turf.pointToLineDistance(turf.point(trueMidpoint), divider, {
+      units: "meters",
+    });
+    expect(distDivider).toBeLessThan(1);
+
+    // Distance from midpoint to the hot/cold region boundary should also be sub-meter
+    const distHot = turf.pointToLineDistance(
+      turf.point(trueMidpoint),
+      turf.polygonToLine(hot) as any,
+      {
+        units: "meters",
+      },
+    );
+    const distCold = turf.pointToLineDistance(
+      turf.point(trueMidpoint),
+      turf.polygonToLine(cold) as any,
+      {
+        units: "meters",
+      },
+    );
+    expect(distHot).toBeLessThan(1);
+    expect(distCold).toBeLessThan(1);
+
+    // Regions partition the boundary
+    const areaTotal = turf.area(viennaBoundary);
+    const areaSum = turf.area(hot) + turf.area(cold);
+    expect(areaSum / areaTotal).toBeCloseTo(1, 4);
+    expect(turf.booleanPointInPolygon(turf.point(start), cold)).toBe(true);
+    expect(turf.booleanPointInPolygon(turf.point(end), hot)).toBe(true);
+    expect(turf.booleanPointInPolygon(turf.point(start), hot)).toBe(false);
+    expect(turf.booleanPointInPolygon(turf.point(end), cold)).toBe(false);
+  });
+
+  it("accurately partitions large boundaries like Lower Austria without Mercator distortion", () => {
+    const lowerAustriaBoundary = turf.polygon([
+      [
+        [14.4, 47.4],
+        [17.1, 47.4],
+        [17.1, 49.0],
+        [14.4, 49.0],
+        [14.4, 47.4],
+      ],
+    ]) as AreaFeature;
+    const start: [number, number] = [15.96, 47.9];
+    const end: [number, number] = [15.99, 47.897];
+    const divider = thermometerDivider(lowerAustriaBoundary, start, end);
+    const hot = thermometerRegion(lowerAustriaBoundary, start, end, "END");
+    const cold = thermometerRegion(lowerAustriaBoundary, start, end, "START");
+
+    const projStart = projectToWebMercator(start);
+    const projEnd = projectToWebMercator(end);
+    const trueMidpoint = unprojectFromWebMercator([
+      (projStart[0] + projEnd[0]) / 2,
+      (projStart[1] + projEnd[1]) / 2,
+    ]);
+
+    const distDivider = turf.pointToLineDistance(turf.point(trueMidpoint), divider, {
+      units: "meters",
+    });
+    expect(distDivider).toBeLessThan(1);
+
+    const distHot = turf.pointToLineDistance(
+      turf.point(trueMidpoint),
+      turf.polygonToLine(hot) as any,
+      { units: "meters" },
+    );
+    const distCold = turf.pointToLineDistance(
+      turf.point(trueMidpoint),
+      turf.polygonToLine(cold) as any,
+      { units: "meters" },
+    );
+    expect(distHot).toBeLessThan(1);
+    expect(distCold).toBeLessThan(1);
+
+    const areaTotal = turf.area(lowerAustriaBoundary);
+    const areaSum = turf.area(hot) + turf.area(cold);
+    expect(areaSum / areaTotal).toBeCloseTo(1, 4);
   });
 
   it("builds reusable Matching and Measuring place effects and local Hider guidance", () => {
