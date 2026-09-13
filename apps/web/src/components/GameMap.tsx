@@ -48,9 +48,9 @@ function visibility(map: MapLibreMap, layer: string, visible: boolean) {
   if (map.getLayer(layer)) map.setLayoutProperty(layer, "visibility", visible ? "visible" : "none");
 }
 
-function applyLayerVisibility(map: MapLibreMap, layers: MapLayers) {
+function applyLayerVisibility(map: MapLibreMap, layers: MapLayers, questionFocused = false) {
   visibility(map, "possible-fill", layers.possibleArea);
-  visibility(map, "possible-line", layers.possibleArea);
+  visibility(map, "possible-line", layers.possibleArea && !questionFocused);
   visibility(map, "question-fill", layers.questionGeometry);
   visibility(map, "question-line", layers.questionGeometry);
   visibility(map, "question-divider-line", layers.questionGeometry);
@@ -81,8 +81,16 @@ export function GameMap({
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onMapClick);
   const layersRef = useRef(layers);
+  const questionFocusedRef = useRef(false);
   onClickRef.current = onMapClick;
   layersRef.current = layers;
+
+  const selectedQuestion = selectedQuestionId
+    ? state.questions.find((question) => question.id === selectedQuestionId)
+    : null;
+  const questionFocused =
+    draftQuestionActive || Boolean(selectedQuestion && selectedQuestion.status !== "APPLIED");
+  questionFocusedRef.current = questionFocused;
 
   const visibleStations = useMemo(() => {
     const source = state.game.transitStations;
@@ -114,7 +122,12 @@ export function GameMap({
     const persisted = draftQuestionActive
       ? []
       : state.questions
-          .filter((question) => question.enabled && question.visualization)
+          .filter(
+            (question) =>
+              question.enabled &&
+              question.visualization &&
+              (!selectedQuestionId || question.id === selectedQuestionId),
+          )
           .map((question) => {
             const visual = question.visualization;
             if (!visual) return null;
@@ -160,10 +173,14 @@ export function GameMap({
     const thermometerFallback =
       draftQuestionActive && start && end && draftFeatures.length === 0
         ? [
-            turf.lineString([start, end], { artifactRole: "reference-line" }),
+            turf.lineString([start, end], {
+              artifactRole: "reference-line",
+              selected: true,
+              preview: true,
+            }),
             {
               ...thermometerDivider(state.game.boundary, start, end),
-              properties: { artifactRole: "decision-boundary" },
+              properties: { artifactRole: "decision-boundary", selected: true, preview: true },
             },
           ]
         : [];
@@ -422,7 +439,7 @@ export function GameMap({
       );
       setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
       setData(map, "question-draft-point", liveDraftPoints);
-      applyLayerVisibility(map, layersRef.current);
+      applyLayerVisibility(map, layersRef.current, questionFocusedRef.current);
       const bounds = turf.bbox(state.game.boundary);
       map.fitBounds(
         [
@@ -458,7 +475,7 @@ export function GameMap({
     setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
     setData(map, "question-draft-point", liveDraftPoints);
     setData(map, "measurement", measurement.length === 2 ? turf.lineString(measurement) : empty);
-    applyLayerVisibility(map, layers);
+    applyLayerVisibility(map, layers, questionFocused);
   }, [
     state,
     layers,
@@ -467,6 +484,7 @@ export function GameMap({
     liveDraftPoints,
     measurement,
     questionGeometry,
+    questionFocused,
     visibleStations,
     importedDatasets,
   ]);

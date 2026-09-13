@@ -5,6 +5,8 @@ import {
   areaSquareKilometers,
   buildQuestionArtifacts,
   evaluateQuestionAtPosition,
+  getQuestionAnswers,
+  getQuestionDefinition,
   normalizeArea,
   recomputePossibleArea,
   thermometerDivider,
@@ -173,6 +175,88 @@ describe("area geometry", () => {
     );
     expect(measuringEvaluation?.answer).toBe("CLOSER");
     expect(measuringEvaluation?.summary).toContain("closer");
+  });
+
+  it("builds Tentacles Voronoi cells, radius exclusion, and local Hider evaluation", () => {
+    const attractions: UploadedDataset = {
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Theme Parks",
+      category: "TENTACLES",
+      originalFilename: "parks.kml",
+      geojson: turf.featureCollection([
+        turf.point([0.9, 1], { name: "North Park" }),
+        turf.point([1.1, 1], { name: "East Park" }),
+        turf.point([1.9, 1.9], { name: "Faraway Park" }),
+      ]),
+      featureCount: 3,
+      createdAt: "2026-09-11T00:00:00.000Z",
+      updatedAt: "2026-09-11T00:00:00.000Z",
+    };
+    const context = { boundary, subdivisions: null, datasets: [attractions] };
+    const referencePoint: [number, number] = [1, 1];
+    const radiusMeters = 25_000;
+    const parameters = { referencePoint, radiusMeters, datasetId: attractions.id };
+
+    const definition = getQuestionDefinition("tentacles.dataset");
+    const answers = getQuestionAnswers(definition, parameters, context);
+    expect(answers.map((a) => a.value)).toEqual(["place:0", "place:1", "OUTSIDE"]);
+    expect(answers[0]!.label).toContain("North Park");
+    expect(answers[1]!.label).toContain("East Park");
+
+    const draft = buildQuestionArtifacts("tentacles.dataset", parameters, null, context).artifacts;
+    expect(draft.effect).toBeNull();
+    expect(draft.visualization?.type).toBe("FeatureCollection");
+    if (draft.visualization?.type === "FeatureCollection") {
+      const roles = draft.visualization.features.map((f) => f.properties?.artifactRole);
+      expect(roles).toContain("candidate-region");
+      expect(roles).toContain("seeker-reference");
+      expect(roles).toContain("decision-boundary");
+      expect(roles).toContain("reference-line");
+      expect(roles).toContain("dataset-place");
+    }
+
+    const answerPlace0 = buildQuestionArtifacts(
+      "tentacles.dataset",
+      parameters,
+      "place:0",
+      context,
+    ).artifacts;
+    expect(answerPlace0.effect?.mode).toBe("INTERSECT");
+    expect(turf.booleanPointInPolygon(turf.point([0.92, 1]), answerPlace0.effect!.geometry)).toBe(
+      true,
+    );
+    expect(turf.booleanPointInPolygon(turf.point([1.08, 1]), answerPlace0.effect!.geometry)).toBe(
+      false,
+    );
+
+    const answerOutside = buildQuestionArtifacts(
+      "tentacles.dataset",
+      parameters,
+      "OUTSIDE",
+      context,
+    ).artifacts;
+    expect(answerOutside.effect?.mode).toBe("SUBTRACT");
+    const recomputed = recomputePossibleArea(boundary, [answerOutside.effect!]);
+    expect(turf.booleanPointInPolygon(turf.point([1, 1]), recomputed!)).toBe(false);
+    expect(turf.booleanPointInPolygon(turf.point([0.1, 0.1]), recomputed!)).toBe(true);
+
+    const evalNearNorth = evaluateQuestionAtPosition(
+      "tentacles.dataset",
+      parameters,
+      [0.91, 1],
+      context,
+    );
+    expect(evalNearNorth?.answer).toBe("place:0");
+    expect(evalNearNorth?.summary).toContain("North Park");
+
+    const evalOutside = evaluateQuestionAtPosition(
+      "tentacles.dataset",
+      parameters,
+      [0.1, 0.1],
+      context,
+    );
+    expect(evalOutside?.answer).toBe("OUTSIDE");
+    expect(evalOutside?.summary).toContain("outside the tentacle radius");
   });
 
   it("handles a MultiPolygon game boundary", () => {

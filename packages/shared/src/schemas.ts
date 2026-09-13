@@ -99,6 +99,13 @@ export const placeQuestionParametersSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+export const tentacleQuestionParametersSchema = z.object({
+  referencePoint: positionSchema,
+  radiusMeters: z.number().positive().max(1_000_000).default(10_000),
+  datasetId: z.string().uuid(),
+  note: z.string().trim().max(500).optional(),
+});
+
 export const createQuestionSchema = z.object({
   definitionId: z.string().min(1).max(100),
   parameters: z.record(z.string(), z.unknown()),

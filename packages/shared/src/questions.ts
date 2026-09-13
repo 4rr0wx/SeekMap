@@ -2,10 +2,10 @@ import * as turf from "@turf/turf";
 import type { FeatureCollection, Geometry, MultiPolygon, Polygon } from "geojson";
 import type { z } from "zod";
 import {
-  datasetQuestionParametersSchema,
   firstDivisionParametersSchema,
   placeQuestionParametersSchema,
   radarParametersSchema,
+  tentacleQuestionParametersSchema,
   thermometerParametersSchema,
 } from "./schemas.js";
 import {
@@ -16,10 +16,13 @@ import {
   thermometerRegion,
 } from "./geometry.js";
 import {
+  candidateTentaclePlaces,
   datasetPlaces,
   matchingPlaceRegion,
   measuringPlaceRegion,
   nearestDatasetPlace,
+  tentaclePlaceRegion,
+  tentaclesVisualizationFeatures,
 } from "./place-questions.js";
 import type {
   AreaFeature,
@@ -49,19 +52,43 @@ export interface QuestionArtifacts {
   effect: GeometryEffect | null;
 }
 
-export interface QuestionDefinition<T extends Record<string, unknown> = Record<string, unknown>> {
+export interface QuestionDefinition<T = any> {
   id: string;
   category: QuestionCategory;
   name: string;
   description: string;
   parameterKind: "RADAR" | "THERMOMETER" | "POINT" | "DATASET";
   parametersSchema: z.ZodType<T>;
-  answers: readonly AnswerOption[];
+  answers:
+    | readonly AnswerOption[]
+    | ((parameters: T, context: QuestionContext) => readonly AnswerOption[]);
   baseCost: number;
   repeatRule: RepeatCostRule;
   requiredDatasetCategory?: DatasetCategory;
   exactRulePending?: boolean;
   buildArtifacts(parameters: T, answer: string | null, context: QuestionContext): QuestionArtifacts;
+}
+
+export function getQuestionAnswers(
+  definition: QuestionDefinition,
+  parameters?: Record<string, unknown>,
+  context?: QuestionContext,
+): readonly AnswerOption[] {
+  if (typeof definition.answers === "function") {
+    if (!parameters || !context) return [];
+    try {
+      const parsed = definition.parametersSchema.parse(parameters);
+      return (
+        definition.answers as (
+          p: Record<string, unknown>,
+          c: QuestionContext,
+        ) => readonly AnswerOption[]
+      )(parsed, context);
+    } catch {
+      return [];
+    }
+  }
+  return definition.answers;
 }
 
 function pointVisualization(point: [number, number] | undefined): MapFeature | null {
@@ -321,47 +348,121 @@ const measuringPlaces: QuestionDefinition<z.infer<typeof placeQuestionParameters
   },
 };
 
-function placeholderDefinition(
-  id: string,
-  category: QuestionCategory,
-  name: string,
-  description: string,
-  requiredDatasetCategory: DatasetCategory,
-): QuestionDefinition<z.infer<typeof datasetQuestionParametersSchema>> {
-  return {
-    id,
-    category,
-    name,
-    description,
-    parameterKind: "DATASET",
-    parametersSchema: datasetQuestionParametersSchema,
-    answers: [
-      { value: "YES", label: "Yes / matching" },
-      { value: "NO", label: "No / different" },
-    ],
-    baseCost: 1,
-    repeatRule: { type: "LINEAR", increment: 1 },
-    requiredDatasetCategory,
-    exactRulePending: true,
-    buildArtifacts(parameters) {
-      return { visualization: pointVisualization(parameters.referencePoint), effect: null };
-    },
-  };
-}
+const tentaclesPlaces: QuestionDefinition<z.infer<typeof tentacleQuestionParametersSchema>> = {
+  id: "tentacles.dataset",
+  category: "TENTACLES",
+  name: "Tentacles: Places",
+  description:
+    "Which nearby place in the selected dataset is the Hider closest to, or are they outside the radius?",
+  parameterKind: "DATASET",
+  parametersSchema: tentacleQuestionParametersSchema,
+  answers(parameters, context) {
+    try {
+      const dataset = datasetFor(parameters.datasetId, context);
+      const places = datasetPlaces(dataset, context.boundary);
+      const candidates = candidateTentaclePlaces(
+        places,
+        parameters.referencePoint,
+        parameters.radiusMeters,
+      );
+      const placeOptions = candidates.map((place) => ({
+        value: `place:${place.index}`,
+        label: `${place.name} (${formatMeters(place.distanceMeters)})`,
+      }));
+      return [...placeOptions, { value: "OUTSIDE", label: "Outside radius" }];
+    } catch {
+      return [{ value: "OUTSIDE", label: "Outside radius" }];
+    }
+  },
+  baseCost: 1,
+  repeatRule: { type: "LINEAR", increment: 1 },
+  requiredDatasetCategory: "TENTACLES",
+  buildArtifacts(parameters, answer, context) {
+    const dataset = datasetFor(parameters.datasetId, context);
+    const { candidatePlaces, circleInBoundary, features } = tentaclesVisualizationFeatures(
+      dataset,
+      context,
+      parameters.referencePoint,
+      parameters.radiusMeters,
+    );
+    if (!circleInBoundary) {
+      throw new Error("Tentacle radius is completely outside the game boundary");
+    }
+    if (answer === "OUTSIDE") {
+      const outsideRegion = subtractArea(context.boundary, circleInBoundary);
+      if (!outsideRegion)
+        throw new Error("Answering outside leaves no possible area inside boundary");
+      const area = {
+        ...outsideRegion,
+        properties: {
+          ...(outsideRegion.properties ?? {}),
+          artifactRole: "answer-region",
+          answer: "OUTSIDE",
+          datasetId: dataset.id,
+          datasetName: dataset.name,
+        },
+      } as MapFeature;
+      return {
+        visualization: turf.featureCollection([area, ...features]) as MapFeatureCollection,
+        effect: {
+          mode: "SUBTRACT",
+          geometry: circleInBoundary,
+        },
+      };
+    }
+    if (answer && answer.startsWith("place:")) {
+      const placeIndex = Number(answer.replace("place:", ""));
+      const selected = candidatePlaces.find((p) => p.index === placeIndex);
+      if (!selected) {
+        throw new Error(`Selected place #${placeIndex} is not an active tentacle within radius`);
+      }
+      const tentacleRegion =
+        candidatePlaces.length === 1
+          ? circleInBoundary
+          : tentaclePlaceRegion(circleInBoundary, candidatePlaces, selected);
+      const area = {
+        ...tentacleRegion,
+        properties: {
+          ...(tentacleRegion.properties ?? {}),
+          artifactRole: "answer-region",
+          answer,
+          datasetId: dataset.id,
+          datasetName: dataset.name,
+          placeIndex: selected.index,
+          placeName: selected.name,
+        },
+      } as MapFeature;
+      return {
+        visualization: turf.featureCollection([area, ...features]) as MapFeatureCollection,
+        effect: {
+          mode: "INTERSECT",
+          geometry: tentacleRegion,
+        },
+      };
+    }
+    const area = {
+      ...circleInBoundary,
+      properties: {
+        ...(circleInBoundary.properties ?? {}),
+        artifactRole: "candidate-region",
+        datasetId: dataset.id,
+        datasetName: dataset.name,
+      },
+    } as MapFeature;
+    return {
+      visualization: turf.featureCollection([area, ...features]) as MapFeatureCollection,
+      effect: null,
+    };
+  },
+};
 
 export const QUESTION_DEFINITIONS: readonly QuestionDefinition[] = [
-  radar as QuestionDefinition,
-  thermometer as QuestionDefinition,
-  firstDivision as QuestionDefinition,
-  placeholderDefinition(
-    "tentacles.dataset",
-    "TENTACLES",
-    "Tentacles",
-    "Use a selected place dataset for a Tentacles question.",
-    "TENTACLES",
-  ),
-  matchingPlaces as QuestionDefinition,
-  measuringPlaces as QuestionDefinition,
+  radar,
+  thermometer,
+  firstDivision,
+  tentaclesPlaces,
+  matchingPlaces,
+  measuringPlaces,
 ];
 
 export interface LocalQuestionEvaluation {
@@ -455,6 +556,41 @@ export function evaluateQuestionAtPosition(
       ],
     };
   }
+  if (definitionId === "tentacles.dataset") {
+    const dataset = datasetFor(String(parameters.datasetId), context);
+    const places = datasetPlaces(dataset, context.boundary);
+    const center = parameters.referencePoint as [number, number];
+    const radiusMeters = Number(parameters.radiusMeters ?? 10_000);
+    const distanceToCenter = turf.distance(position, center, { units: "meters" });
+    const candidates = candidateTentaclePlaces(places, center, radiusMeters);
+
+    if (distanceToCenter > radiusMeters) {
+      return {
+        answer: "OUTSIDE",
+        summary: "You are outside the tentacle radius.",
+        details: [
+          `Distance to centre: ${formatMeters(distanceToCenter)}`,
+          `Radius: ${formatMeters(radiusMeters)}`,
+        ],
+      };
+    }
+    if (candidates.length === 0) {
+      return {
+        answer: "OUTSIDE",
+        summary: "No tentacle places found within radius.",
+        details: [`Distance to centre: ${formatMeters(distanceToCenter)}`],
+      };
+    }
+    const nearest = nearestDatasetPlace(candidates, position)!;
+    return {
+      answer: `place:${nearest.index}`,
+      summary: `You are in the tentacle zone of ${nearest.name}.`,
+      details: [
+        `Nearest tentacle: ${nearest.name} (${formatMeters(nearest.distanceMeters)})`,
+        `Distance to centre: ${formatMeters(distanceToCenter)}`,
+      ],
+    };
+  }
   return null;
 }
 
@@ -481,7 +617,12 @@ export function buildQuestionArtifacts(
 ): { parameters: Record<string, unknown>; artifacts: QuestionArtifacts } {
   const definition = getQuestionDefinition(definitionId);
   const parameters = definition.parametersSchema.parse(rawParameters) as Record<string, unknown>;
-  if (answer && !definition.answers.some((option) => option.value === answer)) {
+  const allowedAnswers = getQuestionAnswers(definition, parameters, context);
+  if (
+    answer &&
+    allowedAnswers.length > 0 &&
+    !allowedAnswers.some((option) => option.value === answer)
+  ) {
     throw new Error(`Invalid answer for ${definition.name}`);
   }
   return {

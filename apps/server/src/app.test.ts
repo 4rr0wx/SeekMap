@@ -105,6 +105,19 @@ describe("server game integrity", () => {
     expect(response.headers["permissions-policy"]).toBe("geolocation=(self)");
   });
 
+  it("compresses full game snapshots", async () => {
+    const { app } = await fixture();
+    const { seeker } = await createAndJoin(app);
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: { ...auth(seeker.token), "accept-encoding": "gzip" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("gzip");
+  });
+
   it("preserves Fastify client-error status codes", async () => {
     const { app } = await fixture();
     const response = await app.inject({
@@ -380,6 +393,77 @@ describe("server game integrity", () => {
     const applied = (
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
     ).json<GameState>();
+    expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
+  });
+
+  it("runs a Tentacles question with candidate places and applies an area effect", async () => {
+    const { app } = await fixture();
+    const { seeker, hider } = await createAndJoin(app);
+    const zooKml = `<?xml version="1.0"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>Tiergarten Schönbrunn</name><Point><coordinates>16.30,48.18</coordinates></Point></Placemark>
+<Placemark><name>Haus des Meeres</name><Point><coordinates>16.35,48.20</coordinates></Point></Placemark>
+<Placemark><name>Faraway Zoo</name><Point><coordinates>16.55,48.25</coordinates></Point></Placemark>
+</Document></kml>`;
+    const upload = multipart(
+      { name: "Zoos and Aquariums", category: "TENTACLES" },
+      "zoos.kml",
+      zooKml,
+    );
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/datasets",
+      headers: { ...auth(seeker.token), "content-type": upload.contentType },
+      payload: upload.body,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const datasetId = uploaded.json<{ id: string }>().id;
+
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "tentacles.dataset",
+        parameters: { referencePoint: [16.32, 48.19], radiusMeters: 5_000, datasetId },
+      },
+    });
+    expect(draft.statusCode).toBe(201);
+    const questionId = draft.json<{ id: string }>().id;
+
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+
+    const answerRes = await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/answer`,
+      headers: auth(hider.token),
+      payload: { answer: "place:0" },
+    });
+    expect(answerRes.statusCode).toBe(200);
+
+    const answered = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(answered.questions[0]?.status).toBe("ANSWERED");
+    expect(answered.questions[0]?.answer).toBe("place:0");
+
+    const originalArea = turf.area(answered.game.possibleArea!);
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/apply`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+
+    const applied = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(applied.questions[0]?.status).toBe("APPLIED");
     expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
   });
 
