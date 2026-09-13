@@ -181,9 +181,9 @@ export function QuestionComposer({
     try {
       if (question) await patch(`/api/questions/${question.id}`, { parameters }, token);
       else await post("/api/questions", { definitionId, parameters }, token);
-      await refresh();
       onError(null);
       onClose();
+      void refresh();
     } catch (cause) {
       onError((cause as Error).message);
     } finally {

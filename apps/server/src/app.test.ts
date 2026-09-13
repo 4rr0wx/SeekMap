@@ -105,6 +105,19 @@ describe("server game integrity", () => {
     expect(response.headers["permissions-policy"]).toBe("geolocation=(self)");
   });
 
+  it("compresses full game snapshots", async () => {
+    const { app } = await fixture();
+    const { seeker } = await createAndJoin(app);
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: { ...auth(seeker.token), "accept-encoding": "gzip" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("gzip");
+  });
+
   it("preserves Fastify client-error status codes", async () => {
     const { app } = await fixture();
     const response = await app.inject({

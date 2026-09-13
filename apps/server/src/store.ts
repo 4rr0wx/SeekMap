@@ -539,24 +539,26 @@ export class GameStore {
     this.db.delete(games).where(eq(games.id, game.id)).run();
   }
 
-  private context(gameId: string, db = this.db) {
+  private context(gameId: string, includeDatasets: boolean, db = this.db) {
     const game = db.select().from(games).where(eq(games.id, gameId)).get();
     if (!game) throw new DomainError("No current game", 404);
-    const datasetItems: UploadedDataset[] = db
-      .select()
-      .from(datasets)
-      .where(eq(datasets.gameId, gameId))
-      .all()
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        category: row.category as DatasetCategory,
-        originalFilename: row.originalFilename,
-        geojson: decode<MapFeatureCollection>(row.geojson)!,
-        featureCount: row.featureCount,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      }));
+    const datasetItems: UploadedDataset[] = includeDatasets
+      ? db
+          .select()
+          .from(datasets)
+          .where(eq(datasets.gameId, gameId))
+          .all()
+          .map((row) => ({
+            id: row.id,
+            name: row.name,
+            category: row.category as DatasetCategory,
+            originalFilename: row.originalFilename,
+            geojson: decode<MapFeatureCollection>(row.geojson)!,
+            featureCount: row.featureCount,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+          }))
+      : [];
     return {
       boundary: decode<AreaFeature>(game.boundaryGeojson)!,
       subdivisions: decode<FeatureCollection<Polygon | MultiPolygon>>(game.subdivisionsGeojson),
@@ -581,7 +583,12 @@ export class GameStore {
       .get();
     if (!config?.enabled) throw new DomainError("This question is disabled", 409);
     const definition = getQuestionDefinition(definitionId);
-    const built = buildQuestionArtifacts(definitionId, parameters, null, this.context(game.id));
+    const built = buildQuestionArtifacts(
+      definitionId,
+      parameters,
+      null,
+      this.context(game.id, definition.parameterKind === "DATASET"),
+    );
     const id = randomUUID();
     const timestamp = now();
     this.db
@@ -632,7 +639,10 @@ export class GameStore {
       row.definitionId,
       parameters,
       answer,
-      this.context(player.gameId),
+      this.context(
+        player.gameId,
+        getQuestionDefinition(row.definitionId).parameterKind === "DATASET",
+      ),
     );
     this.db
       .update(questions)
@@ -725,7 +735,7 @@ export class GameStore {
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
-      this.context(game.id),
+      this.context(game.id, getQuestionDefinition(row.definitionId).parameterKind === "DATASET"),
     );
     const timestamp = now();
     this.db
@@ -760,7 +770,10 @@ export class GameStore {
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
-      this.context(player.gameId),
+      this.context(
+        player.gameId,
+        getQuestionDefinition(row.definitionId).parameterKind === "DATASET",
+      ),
     );
     const timestamp = now();
     this.db

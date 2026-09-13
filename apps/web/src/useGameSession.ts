@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type { GameState, PublicConfig } from "@hideseek/shared";
 import { currentGame, loadIdentity, publicConfig, saveIdentity, type Identity } from "./api";
@@ -22,6 +22,8 @@ export function useGameSession() {
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshQueued = useRef(false);
 
   const setIdentity = useCallback((value: Identity | null) => {
     saveIdentity(value);
@@ -29,34 +31,50 @@ export function useGameSession() {
     if (!value) setState(null);
   }, []);
 
-  const refresh = useCallback(async () => {
-    try {
-      const result = await currentGame(identity?.token);
-      setError(null);
-      if ("hasGame" in result) {
-        setSummary(result as GameSummary);
-        setState(null);
-      } else {
-        setState((current) =>
-          !current ||
-          current.game.id !== result.game.id ||
-          result.game.revision >= current.game.revision
-            ? result
-            : current,
-        );
-        setSummary({ hasGame: true, game: result.game });
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+
+    const request = (async () => {
+      try {
+        const result = await currentGame(identity?.token);
+        setError(null);
+        if ("hasGame" in result) {
+          setSummary(result as GameSummary);
+          setState(null);
+        } else {
+          setState((current) =>
+            !current ||
+            current.game.id !== result.game.id ||
+            result.game.revision >= current.game.revision
+              ? result
+              : current,
+          );
+          setSummary({ hasGame: true, game: result.game });
+        }
+      } catch (cause) {
+        if (identity && (cause as Error).message.toLowerCase().includes("session")) {
+          setIdentity(null);
+          const result = (await currentGame()) as GameSummary;
+          setSummary(result);
+        } else {
+          setError((cause as Error).message);
+        }
+      } finally {
+        setLoading(false);
       }
-    } catch (cause) {
-      if (identity && (cause as Error).message.toLowerCase().includes("session")) {
-        setIdentity(null);
-        const result = (await currentGame()) as GameSummary;
-        setSummary(result);
-      } else {
-        setError((cause as Error).message);
+    })();
+
+    refreshInFlight.current = request;
+    const settle = () => {
+      if (refreshInFlight.current !== request) return;
+      refreshInFlight.current = null;
+      if (refreshQueued.current) {
+        refreshQueued.current = false;
+        void refresh();
       }
-    } finally {
-      setLoading(false);
-    }
+    };
+    void request.then(settle, settle);
+    return request;
   }, [identity, setIdentity]);
 
   useEffect(() => {
@@ -75,12 +93,12 @@ export function useGameSession() {
       auth: { token: identity.token },
       transports: ["websocket", "polling"],
     });
-    socket.on("connect", () => {
-      setConnected(true);
-      void refresh();
-    });
+    socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
-    socket.on("state:changed", () => void refresh());
+    socket.on("state:changed", () => {
+      if (refreshInFlight.current) refreshQueued.current = true;
+      else void refresh();
+    });
     socket.on("connect_error", () => setConnected(false));
     return () => {
       socket.disconnect();

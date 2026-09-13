@@ -1,0 +1,19 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - paragraph [ref=e11]: Current game
+    - heading "Thermometer QA" [level=1] [ref=e12]
+    - paragraph [ref=e13]: Choose the identity stored only on this device.
+  - generic [ref=e14]:
+    - heading "Join current game" [level=2] [ref=e15]
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - text: Display name
+        - textbox "Display name" [active] [ref=e18]
+      - generic [ref=e19]:
+        - button "Seeker Questions, tools and team notes" [ref=e20] [cursor=pointer]:
+          - strong [ref=e21]: Seeker
+          - generic [ref=e22]: Questions, tools and team notes
+        - button "Hider Shared evidence and answer controls" [ref=e23] [cursor=pointer]:
+          - strong [ref=e24]: Hider
+          - generic [ref=e25]: Shared evidence and answer controls
+      - button "Join game" [ref=e26] [cursor=pointer]

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import compress from "@fastify/compress";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -52,6 +53,7 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
     reply.header("Permissions-Policy", "geolocation=(self)");
     return payload;
   });
+  await app.register(compress, { threshold: 1_024 });
   await app.register(cors, { origin: true, credentials: false });
   await app.register(multipart, {
     limits: { files: 1, fileSize: config.maxUploadBytes, fields: 4, parts: 5 },

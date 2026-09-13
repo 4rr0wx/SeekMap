@@ -10,13 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/compress": "9.2.0",
     "@fastify/cors": "^11.1.0",
     "@fastify/multipart": "^9.2.1",
     "@fastify/static": "^8.2.0",
     "@hideseek/shared": "workspace:*",
     "@tmcw/togeojson": "^7.1.2",
-    "@xmldom/xmldom": "^0.8.11",
     "@turf/turf": "^7.2.0",
+    "@xmldom/xmldom": "^0.8.11",
     "better-sqlite3": "^12.2.0",
     "drizzle-orm": "^0.44.5",
     "fastify": "^5.5.0",

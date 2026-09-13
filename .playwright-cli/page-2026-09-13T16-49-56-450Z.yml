@@ -1,0 +1,74 @@
+- main [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - paragraph [ref=f1e6]: Seeker board
+      - heading "Thermometer QA" [level=1] [ref=f1e7]
+    - generic "Hiding 24:16" [ref=f1e140]:
+      - generic [ref=f1e9]: Hiding
+      - strong [ref=f1e10]: 24:16
+    - button "1/2" [ref=f1e99] [cursor=pointer]
+    - button "Map layers" [ref=f1e18] [cursor=pointer]
+  - generic [ref=f1e31]:
+    - generic "Game map" [ref=f1e32]:
+      - region "Map" [ref=f1e100]
+      - generic:
+        - generic [ref=f1e101]:
+          - button "Zoom in" [ref=f1e102] [cursor=pointer]
+          - button "Zoom out" [ref=f1e104] [cursor=pointer]
+          - button "Drag to rotate map, click to reset north" [ref=f1e106]
+        - group [ref=f1e108]:
+          - generic "Toggle attribution" [ref=f1e109] [cursor=pointer]
+          - generic [ref=f1e110]:
+            - text: ©
+            - link "OpenStreetMap" [ref=f1e111] [cursor=pointer]:
+              - /url: https://www.openstreetmap.org/copyright
+            - text: contributors
+    - generic [ref=f1e41]:
+      - button "Measure distance" [ref=f1e42] [cursor=pointer]
+      - button "Place Seeker marker" [ref=f1e49] [cursor=pointer]
+      - button "Show my location locally" [ref=f1e53] [cursor=pointer]
+    - button "Enable location" [ref=f1e57] [cursor=pointer]
+  - generic [ref=f1e60]:
+    - navigation "Game actions" [ref=f1e61]:
+      - button "History" [ref=f1e62] [cursor=pointer]
+      - button "Ask question" [active] [ref=f1e68] [cursor=pointer]
+      - button "Data" [ref=f1e73] [cursor=pointer]
+    - complementary [ref=f1e113]:
+      - generic [ref=f1e114]:
+        - generic [ref=f1e115]:
+          - paragraph [ref=f1e116]: Draft planning
+          - heading "Ask a question" [level=2] [ref=f1e117]
+        - button "Close" [ref=f1e118] [cursor=pointer]
+      - generic [ref=f1e122]:
+        - generic [ref=f1e123]:
+          - text: Question type
+          - combobox "Question type" [ref=f1e124]:
+            - option "Radar"
+            - option "Thermometer" [selected]
+            - option "First Division"
+            - option "Tentacles"
+            - 'option "Matching: Places"'
+            - 'option "Measuring: Places"'
+        - paragraph [ref=f1e125]: Is the Hider closer to the end point (hotter) or the start point (colder)?
+        - paragraph [ref=f1e126]: Used 2 times · next use 3 · cost 3
+        - generic [ref=f1e127]:
+          - generic [ref=f1e128]:
+            - strong [ref=f1e129]: Start point
+            - generic [ref=f1e130]: No point selected
+          - generic [ref=f1e131]:
+            - button "Choose on map" [ref=f1e132] [cursor=pointer]
+            - button "Use local GPS" [ref=f1e133] [cursor=pointer]
+        - generic [ref=f1e141]:
+          - generic [ref=f1e142]:
+            - strong [ref=f1e143]: End point
+            - generic [ref=f1e144]: No point selected
+          - generic [ref=f1e145]:
+            - button "Choose on map" [ref=f1e146] [cursor=pointer]
+            - button "Use local GPS" [ref=f1e147] [cursor=pointer]
+        - generic "Thermometer map legend" [ref=f1e148]:
+          - generic [ref=f1e149]: Start / colder
+          - generic [ref=f1e151]: End / hotter
+          - generic [ref=f1e153]: Answer boundary
+        - generic [ref=f1e136]:
+          - button "Cancel" [ref=f1e137] [cursor=pointer]
+          - button "Create draft" [disabled] [ref=f1e138]
