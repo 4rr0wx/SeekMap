@@ -99,6 +99,53 @@ const pointKml = (name: string, longitude: number) => `<?xml version="1.0"?>
 <Point><coordinates>${longitude},48.2</coordinates></Point></Placemark></Document></kml>`;
 
 describe("server game integrity", () => {
+  it("allows same-origin geolocation in the browser permissions policy", async () => {
+    const { app } = await fixture();
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    expect(response.headers["permissions-policy"]).toBe("geolocation=(self)");
+  });
+
+  it("preserves Fastify client-error status codes", async () => {
+    const { app } = await fixture();
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/game",
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain("Body cannot be empty");
+  });
+
+  it("lets a Seeker discard an unstarted lobby setup but not a running game", async () => {
+    const first = await fixture();
+    const { seeker } = await createAndJoin(first.app);
+    const discarded = await first.app.inject({
+      method: "DELETE",
+      url: "/api/game",
+      headers: auth(seeker.token),
+    });
+    expect(discarded.statusCode).toBe(200);
+    expect((await first.app.inject({ method: "GET", url: "/api/game/current" })).json()).toEqual({
+      hasGame: false,
+      game: null,
+    });
+
+    const second = await fixture();
+    const joined = await createAndJoin(second.app);
+    await second.app.inject({
+      method: "POST",
+      url: "/api/game/start",
+      headers: auth(joined.seeker.token),
+    });
+    const rejected = await second.app.inject({
+      method: "DELETE",
+      url: "/api/game",
+      headers: auth(joined.seeker.token),
+    });
+    expect(rejected.statusCode).toBe(409);
+  });
+
   it("reuses optional library datasets in a later game", async () => {
     const { app } = await fixture();
     const upload = multipart({}, "Museums.kml", pointKml("Museum", 16.3));
@@ -253,6 +300,87 @@ describe("server game integrity", () => {
     ).json<GameState>();
     expect(state.datasets[0]?.originalFilename).toBe("replacement.kml");
     expect(state.datasets[0]?.geojson.features[0]?.properties?.name).toBe("East");
+  });
+
+  it("runs a dataset Matching question with visible place metadata and an area effect", async () => {
+    const { app } = await fixture();
+    const { seeker, hider } = await createAndJoin(app);
+    const golfKml = `<?xml version="1.0"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>West Golf Club</name><Point><coordinates>16.27,48.2</coordinates></Point></Placemark>
+<Placemark><name>East Golf Club</name><Point><coordinates>16.53,48.2</coordinates></Point></Placemark>
+</Document></kml>`;
+    const upload = multipart(
+      { name: "Golf Courses", category: "MATCHING" },
+      "golf-courses.kml",
+      golfKml,
+    );
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/datasets",
+      headers: { ...auth(seeker.token), "content-type": upload.contentType },
+      payload: upload.body,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const datasetId = uploaded.json<{ id: string }>().id;
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "matching.dataset",
+        parameters: { referencePoint: [16.26, 48.2], datasetId },
+      },
+    });
+    expect(draft.statusCode).toBe(201);
+    const questionId = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const hiderState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(hider.token) })
+    ).json<GameState>();
+    expect(hiderState.datasets.find((item) => item.id === datasetId)?.name).toBe("Golf Courses");
+    expect(hiderState.questions[0]?.parameters).toEqual({
+      referencePoint: [16.26, 48.2],
+      datasetId,
+    });
+    expect(JSON.stringify(hiderState)).not.toContain("hiderLocation");
+
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${questionId}/answer`,
+          headers: auth(hider.token),
+          payload: { answer: "SAME" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const answered = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(answered.questions[0]?.visualization?.type).toBe("FeatureCollection");
+    expect(
+      answered.questions[0]?.visualization?.type === "FeatureCollection" &&
+        answered.questions[0].visualization.features.some(
+          (feature) => feature.properties?.artifactRole === "answer-region",
+        ),
+    ).toBe(true);
+    const originalArea = turf.area(answered.game.possibleArea!);
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/apply`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const applied = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
   });
 
   it("hides drafts from Hiders and tracks repeat usage costs", async () => {

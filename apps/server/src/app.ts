@@ -48,6 +48,10 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
     trustProxy: true,
     bodyLimit: Math.max(config.maxUploadBytes, 1_048_576),
   });
+  app.addHook("onSend", async (_request, reply, payload) => {
+    reply.header("Permissions-Policy", "geolocation=(self)");
+    return payload;
+  });
   await app.register(cors, { origin: true, credentials: false });
   await app.register(multipart, {
     limits: { files: 1, fileSize: config.maxUploadBytes, fields: 4, parts: 5 },
@@ -70,6 +74,12 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
       return reply
         .code(413)
         .send({ error: `KML/KMZ file exceeds the ${config.maxUploadBytes} byte limit` });
+    }
+    const statusCode = (error as { statusCode?: number }).statusCode;
+    if (typeof statusCode === "number" && statusCode >= 400 && statusCode < 500) {
+      return reply.code(statusCode).send({
+        error: error instanceof Error ? error.message : "Invalid request",
+      });
     }
     app.log.error(error);
     return reply.code(500).send({

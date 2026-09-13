@@ -1,5 +1,5 @@
 import * as turf from "@turf/turf";
-import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
+import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
 import type { AreaFeature, AreaGeometry, GeometryEffect } from "./types.js";
 
 function asFeature(value: AreaFeature | AreaGeometry): AreaFeature {
@@ -54,33 +54,105 @@ export function radarCircle(center: [number, number], radiusMeters: number): Are
   );
 }
 
+const WEB_MERCATOR_RADIUS = 6_378_137;
+
+function projectToWebMercator(point: [number, number]): [number, number] {
+  const longitude = (point[0] * Math.PI) / 180;
+  const latitude = (Math.max(-85, Math.min(85, point[1])) * Math.PI) / 180;
+  return [
+    WEB_MERCATOR_RADIUS * longitude,
+    WEB_MERCATOR_RADIUS * Math.log(Math.tan(Math.PI / 4 + latitude / 2)),
+  ];
+}
+
+function unprojectFromWebMercator(point: [number, number]): [number, number] {
+  return [
+    (point[0] / WEB_MERCATOR_RADIUS) * (180 / Math.PI),
+    (2 * Math.atan(Math.exp(point[1] / WEB_MERCATOR_RADIUS)) - Math.PI / 2) * (180 / Math.PI),
+  ];
+}
+
+interface ThermometerPlane {
+  divider: Feature<LineString>;
+  targetHalfPlane: AreaFeature;
+}
+
+function thermometerPlane(
+  boundary: AreaFeature,
+  start: [number, number],
+  end: [number, number],
+  target: "START" | "END",
+): ThermometerPlane {
+  const projectedStart = projectToWebMercator(start);
+  const projectedEnd = projectToWebMercator(end);
+  const delta: [number, number] = [
+    projectedEnd[0] - projectedStart[0],
+    projectedEnd[1] - projectedStart[1],
+  ];
+  const length = Math.hypot(delta[0], delta[1]);
+  if (length === 0) throw new Error("Thermometer start and end point must differ");
+
+  const midpoint: [number, number] = [
+    (projectedStart[0] + projectedEnd[0]) / 2,
+    (projectedStart[1] + projectedEnd[1]) / 2,
+  ];
+  const perpendicular: [number, number] = [-delta[1] / length, delta[0] / length];
+  const targetDirection: [number, number] =
+    target === "END"
+      ? [delta[0] / length, delta[1] / length]
+      : [-delta[0] / length, -delta[1] / length];
+
+  const bounds = turf.bbox(boundary);
+  const projectedSouthWest = projectToWebMercator([bounds[0], bounds[1]]);
+  const projectedNorthEast = projectToWebMercator([bounds[2], bounds[3]]);
+  const boundarySpan = Math.hypot(
+    projectedNorthEast[0] - projectedSouthWest[0],
+    projectedNorthEast[1] - projectedSouthWest[1],
+  );
+  const reach = Math.max(boundarySpan * 4, length * 4, 10_000);
+  const offset = (origin: [number, number], vector: [number, number], amount: number) =>
+    [origin[0] + vector[0] * amount, origin[1] + vector[1] * amount] as [number, number];
+
+  const dividerStart = offset(midpoint, perpendicular, -reach);
+  const dividerEnd = offset(midpoint, perpendicular, reach);
+  const farStart = offset(dividerStart, targetDirection, reach * 2);
+  const farEnd = offset(dividerEnd, targetDirection, reach * 2);
+
+  return {
+    divider: turf.lineString([
+      unprojectFromWebMercator(dividerStart),
+      unprojectFromWebMercator(dividerEnd),
+    ]),
+    targetHalfPlane: turf.polygon([
+      [
+        unprojectFromWebMercator(dividerStart),
+        unprojectFromWebMercator(dividerEnd),
+        unprojectFromWebMercator(farEnd),
+        unprojectFromWebMercator(farStart),
+        unprojectFromWebMercator(dividerStart),
+      ],
+    ]) as AreaFeature,
+  };
+}
+
+export function thermometerDivider(
+  boundary: AreaFeature,
+  start: [number, number],
+  end: [number, number],
+): Feature<LineString> {
+  return thermometerPlane(boundary, start, end, "END").divider;
+}
+
 export function thermometerRegion(
   boundary: AreaFeature,
   start: [number, number],
   end: [number, number],
   target: "START" | "END",
 ): AreaFeature {
-  const bounds = turf.bbox(boundary);
-  const span = Math.max(bounds[2] - bounds[0], bounds[3] - bounds[1], 0.1);
-  const padding = span * 4;
-  const box: [number, number, number, number] = [
-    Math.max(-180, bounds[0] - padding),
-    Math.max(-85, bounds[1] - padding),
-    Math.min(180, bounds[2] + padding),
-    Math.min(85, bounds[3] + padding),
-  ];
-  const sites = turf.featureCollection([
-    turf.point(start, { site: "START" }),
-    turf.point(end, { site: "END" }),
-  ]);
-  const cells = turf.voronoi(sites, { bbox: box });
-  const point = turf.point(target === "START" ? start : end);
-  const cell = cells.features.find(
-    (candidate): candidate is Feature<Polygon> =>
-      Boolean(candidate) && turf.booleanPointInPolygon(point, candidate as Feature<Polygon>),
-  );
-  if (!cell) throw new Error("Thermometer region could not be constructed");
-  return normalizeArea(cell);
+  const plane = thermometerPlane(boundary, start, end, target);
+  const region = intersectAreas(boundary, plane.targetHalfPlane);
+  if (!region) throw new Error("Thermometer region does not overlap the game boundary");
+  return region;
 }
 
 export function findContainingArea(

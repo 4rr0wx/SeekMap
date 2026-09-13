@@ -20,16 +20,17 @@ import {
 import {
   deriveTimer,
   formatDuration,
-  getQuestionDefinition,
   type DatasetCategory,
   type GameState,
+  type MapFeature,
+  type MapFeatureCollection,
   type PublicConfig,
   type QuestionInstance,
   type SeekerMarker,
 } from "@hideseek/shared";
 import { api, patch, post, remove } from "../api";
 import { GameMap, type MapLayers } from "./GameMap";
-import { QuestionComposer, QuestionHistory } from "./QuestionPanel";
+import { QuestionActivitySidebar, QuestionComposer, QuestionHistory } from "./QuestionPanel";
 
 interface Props {
   state: GameState;
@@ -96,6 +97,10 @@ export function GameScreen({
     markers: true,
   });
   const [localPosition, setLocalPosition] = useState<[number, number] | null>(null);
+  const [locationStatus, setLocationStatus] = useState<
+    "idle" | "requesting" | "available" | "blocked"
+  >("idle");
+  const [locationMessage, setLocationMessage] = useState<string | null>(null);
   const [measurement, setMeasurement] = useState<[number, number][]>([]);
   const [interaction, setInteraction] = useState<Interaction>(null);
   const [pickedQuestionPoint, setPickedQuestionPoint] = useState<{
@@ -103,7 +108,13 @@ export function GameScreen({
     point: [number, number];
     nonce: number;
   } | null>(null);
+  const [draftQuestionPoints, setDraftQuestionPoints] = useState<
+    Partial<Record<"A" | "B", [number, number]>>
+  >({});
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
+  const [draftQuestionGeometry, setDraftQuestionGeometry] = useState<
+    MapFeatureCollection | MapFeature | null
+  >(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [markerDraft, setMarkerDraft] = useState<{
     point: [number, number];
@@ -117,29 +128,75 @@ export function GameScreen({
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!("permissions" in navigator)) return;
+    void navigator.permissions
+      .query({ name: "geolocation" })
+      .then((permission) => {
+        if (permission.state === "denied") {
+          setLocationStatus("blocked");
+          setLocationMessage(
+            "Location is blocked for this site. Allow it in the browser's site settings, then try again.",
+          );
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
   const timer = gameTimer(state, currentTime);
   const distance =
     measurement.length === 2
       ? turf.distance(measurement[0]!, measurement[1]!, { units: "kilometers" })
       : null;
-  const pendingForHider =
-    state.me.role === "HIDER" && state.game.hiderAssistance
-      ? state.questions.find((question) => question.status === "PENDING")
-      : undefined;
+  const activeQuestions = state.questions.filter((question) => question.status !== "APPLIED");
+
+  useEffect(() => {
+    if (activeQuestions[0] && !selectedQuestionId) setSelectedQuestionId(activeQuestions[0].id);
+  }, [activeQuestions, selectedQuestionId]);
 
   function requestGps(questionTarget?: "A" | "B") {
-    if (!navigator.geolocation) return onError("Geolocation is not supported on this device.");
+    if (!window.isSecureContext) {
+      const message =
+        "Location requires a secure HTTPS address on iPad and other mobile browsers. Open this app through its HTTPS URL.";
+      setLocationStatus("blocked");
+      setLocationMessage(message);
+      onError(message);
+      return;
+    }
+    if (!navigator.geolocation) {
+      const message = "Geolocation is not supported by this browser.";
+      setLocationStatus("blocked");
+      setLocationMessage(message);
+      onError(message);
+      return;
+    }
+    setLocationStatus("requesting");
+    setLocationMessage(null);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         // Architectural privacy boundary: this coordinate remains React-local and is only passed to GameMap.
         const point: [number, number] = [position.coords.longitude, position.coords.latitude];
         setLocalPosition(point);
+        setLocationStatus("available");
+        setLocationMessage(null);
         if (questionTarget) {
           setPickedQuestionPoint({ target: questionTarget, point, nonce: Date.now() });
+          setDraftQuestionPoints((current) => ({ ...current, [questionTarget]: point }));
         }
         onError(null);
       },
-      (error) => onError(`Local GPS unavailable: ${error.message}`),
+      (error) => {
+        const embedded = window.top !== window.self;
+        const message =
+          error.code === error.PERMISSION_DENIED
+            ? embedded
+              ? "Location is blocked in this embedded view. Open the app directly in its own HTTPS tab and allow location access."
+              : "Location is blocked for this site. Allow location in the browser's site settings, then reload and try again."
+            : `Local GPS unavailable: ${error.message}`;
+        setLocationStatus("blocked");
+        setLocationMessage(message);
+        onError(message);
+      },
       { enableHighAccuracy: true, maximumAge: 15_000, timeout: 15_000 },
     );
   }
@@ -151,11 +208,13 @@ export function GameScreen({
       setMarkerDraft({ point, title: "", note: "" });
       setInteraction(null);
     } else if (interaction === "question-a" || interaction === "question-b") {
+      const target = interaction === "question-a" ? "A" : "B";
       setPickedQuestionPoint({
-        target: interaction === "question-a" ? "A" : "B",
+        target,
         point,
         nonce: Date.now(),
       });
+      setDraftQuestionPoints((current) => ({ ...current, [target]: point }));
       setInteraction(null);
     }
   }
@@ -166,15 +225,6 @@ export function GameScreen({
       else await post(path, {}, token);
       await refresh();
       onError(null);
-    } catch (cause) {
-      onError((cause as Error).message);
-    }
-  }
-
-  async function answerPending(question: QuestionInstance, answer: string) {
-    try {
-      await post(`/api/questions/${question.id}/answer`, { answer }, token);
-      await refresh();
     } catch (cause) {
       onError((cause as Error).message);
     }
@@ -251,7 +301,9 @@ export function GameScreen({
           layers={layers}
           localPosition={localPosition}
           measurement={measurement}
-          draftQuestionPoint={pickedQuestionPoint?.point ?? null}
+          draftQuestionActive={composer.open}
+          draftQuestionPoints={draftQuestionPoints}
+          draftQuestionGeometry={draftQuestionGeometry}
           selectedQuestionId={selectedQuestionId}
           interactionActive={interaction !== null}
           onMapClick={mapClick}
@@ -284,6 +336,22 @@ export function GameScreen({
             <Crosshair />
           </button>
         </div>
+        {!localPosition && (
+          <div
+            className={`location-card ${locationStatus === "blocked" ? "blocked" : ""}`}
+            aria-live="polite"
+          >
+            {locationMessage && <span>{locationMessage}</span>}
+            <button
+              className="button secondary small-button"
+              disabled={locationStatus === "requesting"}
+              onClick={() => requestGps()}
+            >
+              <Crosshair size={16} />{" "}
+              {locationStatus === "requesting" ? "Requesting…" : "Enable location"}
+            </button>
+          </div>
+        )}
         {interaction && (
           <div className="interaction-hint">
             {interaction === "measure"
@@ -307,48 +375,73 @@ export function GameScreen({
         )}
       </section>
 
-      <nav className="bottom-bar" aria-label="Game actions">
-        <button onClick={() => setPanel("history")}>
-          <History />
-          <span>History</span>
-        </button>
-        {state.me.role === "SEEKER" && (
-          <button
-            className="ask-button"
-            onClick={() => {
-              setPickedQuestionPoint(null);
-              setInteraction(null);
-              setComposer({ open: true, question: null });
-            }}
-          >
-            <CircleHelp />
-            <span>Ask question</span>
+      <div className="action-rail">
+        <nav className="bottom-bar" aria-label="Game actions">
+          <button onClick={() => setPanel("history")}>
+            <History />
+            <span>History</span>
           </button>
-        )}
-        <button onClick={() => setPanel("data")}>
-          <Database />
-          <span>Data</span>
-        </button>
-      </nav>
+          {state.me.role === "SEEKER" && (
+            <button
+              className="ask-button"
+              onClick={() => {
+                setPickedQuestionPoint(null);
+                setDraftQuestionPoints({});
+                setInteraction(null);
+                setComposer({ open: true, question: null });
+              }}
+            >
+              <CircleHelp />
+              <span>Ask question</span>
+            </button>
+          )}
+          <button onClick={() => setPanel("data")}>
+            <Database />
+            <span>Data</span>
+          </button>
+        </nav>
 
-      {pendingForHider && (
-        <aside className="pending-answer">
-          <p className="eyebrow">Question waiting</p>
-          <h2>{pendingForHider.displayName}</h2>
-          <p>{getQuestionDefinition(pendingForHider.definitionId).description}</p>
-          <div className="answer-grid">
-            {getQuestionDefinition(pendingForHider.definitionId).answers.map((option) => (
-              <button
-                key={option.value}
-                className="button primary"
-                onClick={() => void answerPending(pendingForHider, option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </aside>
-      )}
+        {panel === null && !composer.open && activeQuestions.length > 0 && (
+          <QuestionActivitySidebar
+            state={state}
+            token={token}
+            refresh={refresh}
+            onError={onError}
+            questions={activeQuestions}
+            localPosition={localPosition}
+            onRequestGps={() => requestGps()}
+            onSelect={setSelectedQuestionId}
+            onEdit={(question) => {
+              setPickedQuestionPoint(null);
+              setDraftQuestionPoints({});
+              setInteraction(null);
+              setComposer({ open: true, question });
+            }}
+          />
+        )}
+        {composer.open && (
+          <QuestionComposer
+            state={state}
+            token={token}
+            refresh={refresh}
+            onError={onError}
+            question={composer.question}
+            localPosition={localPosition}
+            pickedPoint={pickedQuestionPoint}
+            pickingFromMap={interaction === "question-a" || interaction === "question-b"}
+            onPickFromMap={(target) => setInteraction(target === "A" ? "question-a" : "question-b")}
+            onRequestGps={requestGps}
+            onPreviewChange={setDraftQuestionGeometry}
+            onClose={() => {
+              setComposer({ open: false, question: null });
+              setPickedQuestionPoint(null);
+              setDraftQuestionPoints({});
+              setInteraction(null);
+              setDraftQuestionGeometry(null);
+            }}
+          />
+        )}
+      </div>
 
       {panel === "history" && (
         <QuestionHistory
@@ -357,31 +450,16 @@ export function GameScreen({
           refresh={refresh}
           onError={onError}
           onClose={() => setPanel(null)}
-          onSelect={setSelectedQuestionId}
+          onSelect={(id) => {
+            setSelectedQuestionId(id);
+            setPanel(null);
+          }}
           onEdit={(question) => {
             setPanel(null);
             setPickedQuestionPoint(null);
+            setDraftQuestionPoints({});
             setInteraction(null);
             setComposer({ open: true, question });
-          }}
-        />
-      )}
-      {composer.open && (
-        <QuestionComposer
-          state={state}
-          token={token}
-          refresh={refresh}
-          onError={onError}
-          question={composer.question}
-          localPosition={localPosition}
-          pickedPoint={pickedQuestionPoint}
-          pickingFromMap={interaction === "question-a" || interaction === "question-b"}
-          onPickFromMap={(target) => setInteraction(target === "A" ? "question-a" : "question-b")}
-          onRequestGps={requestGps}
-          onClose={() => {
-            setComposer({ open: false, question: null });
-            setPickedQuestionPoint(null);
-            setInteraction(null);
           }}
         />
       )}
@@ -417,8 +495,11 @@ export function GameScreen({
               void gameAction("/api/game/end");
           }}
           onReset={() => {
-            if (window.confirm("Permanently clear the ended game and all its shared data?"))
-              void gameAction("/api/game", "DELETE");
+            const message =
+              state.game.phase === "LOBBY"
+                ? "Discard this unstarted game setup and all joined players so you can create it again?"
+                : "Permanently clear the ended game and all its shared data?";
+            if (window.confirm(message)) void gameAction("/api/game", "DELETE");
           }}
           onLeaveDevice={() => {
             onIdentityCleared();
@@ -817,10 +898,16 @@ function GamePanel({
           ))}
         </div>
         {state.me.role === "SEEKER" && state.game.phase === "LOBBY" && (
-          <button className="button primary wide" onClick={onStart}>
-            <Play size={18} />
-            Start game
-          </button>
+          <>
+            <button className="button primary wide" onClick={onStart}>
+              <Play size={18} />
+              Start game
+            </button>
+            <button className="button danger-button wide" onClick={onReset}>
+              <Trash2 size={17} />
+              Discard setup
+            </button>
+          </>
         )}
         {state.me.role === "SEEKER" && !["LOBBY", "ENDED"].includes(state.game.phase) && (
           <button className="button danger-button wide" onClick={onEnd}>

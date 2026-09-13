@@ -4,10 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   areaSquareKilometers,
   buildQuestionArtifacts,
+  evaluateQuestionAtPosition,
   normalizeArea,
   recomputePossibleArea,
+  thermometerDivider,
   thermometerRegion,
   type AreaFeature,
+  type UploadedDataset,
 } from "./index";
 
 const boundary = turf.polygon([
@@ -80,6 +83,96 @@ describe("area geometry", () => {
     expect(turf.booleanPointInPolygon(turf.point(start), cold)).toBe(true);
     expect(turf.booleanPointInPolygon(turf.point(end), hot)).toBe(true);
     expect(turf.booleanPointInPolygon(turf.point(end), cold)).toBe(false);
+  });
+
+  it("builds a Mercator-perpendicular Thermometer divider and answer preview", () => {
+    const start: [number, number] = [16.1, 48.2];
+    const end: [number, number] = [16.5, 48.2];
+    const viennaBoundary = turf.polygon([
+      [
+        [15.9, 47.9],
+        [16.7, 47.9],
+        [16.7, 48.5],
+        [15.9, 48.5],
+        [15.9, 47.9],
+      ],
+    ]) as AreaFeature;
+    const divider = thermometerDivider(viennaBoundary, start, end);
+    const [dividerStart, dividerEnd] = divider.geometry.coordinates;
+    expect(dividerStart![0]!).toBeCloseTo(dividerEnd![0]!, 8);
+
+    const draft = buildQuestionArtifacts("thermometer.standard", { start, end }, null, {
+      boundary: viennaBoundary,
+      subdivisions: null,
+      datasets: [],
+    }).artifacts.visualization;
+    expect(draft?.type).toBe("FeatureCollection");
+    if (draft?.type === "FeatureCollection") {
+      expect(draft.features.map((feature) => feature.properties?.artifactRole)).toEqual([
+        "reference-line",
+        "decision-boundary",
+        "thermometer-start",
+        "thermometer-end",
+      ]);
+    }
+
+    const answered = buildQuestionArtifacts("thermometer.standard", { start, end }, "HOTTER", {
+      boundary: viennaBoundary,
+      subdivisions: null,
+      datasets: [],
+    }).artifacts;
+    expect(answered.effect).not.toBeNull();
+    expect(answered.visualization?.type).toBe("FeatureCollection");
+    if (answered.visualization?.type === "FeatureCollection") {
+      expect(answered.visualization.features[0]?.properties?.artifactRole).toBe("answer-region");
+    }
+  });
+
+  it("builds reusable Matching and Measuring place effects and local Hider guidance", () => {
+    const places: UploadedDataset = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Golf Courses",
+      category: "MATCHING",
+      originalFilename: "golf-courses.kml",
+      geojson: turf.featureCollection([
+        turf.point([0.4, 1], { name: "West Golf Club" }),
+        turf.point([1.6, 1], { name: "East Golf Club" }),
+      ]),
+      featureCount: 2,
+      createdAt: "2026-09-11T00:00:00.000Z",
+      updatedAt: "2026-09-11T00:00:00.000Z",
+    };
+    const context = { boundary, subdivisions: null, datasets: [places] };
+    const parameters = { referencePoint: [0.3, 1], datasetId: places.id };
+
+    const same = buildQuestionArtifacts("matching.dataset", parameters, "SAME", context).artifacts;
+    expect(same.effect).not.toBeNull();
+    expect(turf.booleanPointInPolygon(turf.point([0.2, 1]), same.effect!.geometry)).toBe(true);
+    expect(turf.booleanPointInPolygon(turf.point([1.8, 1]), same.effect!.geometry)).toBe(false);
+    const matchEvaluation = evaluateQuestionAtPosition(
+      "matching.dataset",
+      parameters,
+      [1.8, 1],
+      context,
+    );
+    expect(matchEvaluation?.answer).toBe("DIFFERENT");
+    expect(matchEvaluation?.details.join(" ")).toContain("East Golf Club");
+
+    const closer = buildQuestionArtifacts(
+      "measuring.dataset",
+      parameters,
+      "CLOSER",
+      context,
+    ).artifacts;
+    expect(closer.effect).not.toBeNull();
+    const measuringEvaluation = evaluateQuestionAtPosition(
+      "measuring.dataset",
+      parameters,
+      [0.39, 1],
+      context,
+    );
+    expect(measuringEvaluation?.answer).toBe("CLOSER");
+    expect(measuringEvaluation?.summary).toContain("closer");
   });
 
   it("handles a MultiPolygon game boundary", () => {

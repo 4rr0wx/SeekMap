@@ -11,10 +11,14 @@ import {
   X,
 } from "lucide-react";
 import {
+  buildQuestionArtifacts,
   calculateQuestionCost,
+  evaluateQuestionAtPosition,
   getQuestionDefinition,
   QUESTION_DEFINITIONS,
   type GameState,
+  type MapFeature,
+  type MapFeatureCollection,
   type QuestionInstance,
 } from "@hideseek/shared";
 import { patch, post, remove } from "../api";
@@ -33,6 +37,7 @@ interface ComposerProps extends CommonProps {
   pickingFromMap: boolean;
   onPickFromMap: (target: "A" | "B") => void;
   onRequestGps: (target: "A" | "B") => void;
+  onPreviewChange: (geometry: MapFeatureCollection | MapFeature | null) => void;
   onClose: () => void;
 }
 
@@ -89,6 +94,7 @@ export function QuestionComposer({
   pickingFromMap,
   onPickFromMap,
   onRequestGps,
+  onPreviewChange,
   onClose,
 }: ComposerProps) {
   const [definitionId, setDefinitionId] = useState(question?.definitionId ?? "radar.standard");
@@ -118,11 +124,41 @@ export function QuestionComposer({
     ? calculateQuestionCost(questionConfig.baseCost, previousUses + 1, questionConfig.repeatRule)
     : null;
 
+  function currentParameters(): Record<string, unknown> | null {
+    if (!pointA || (definition.parameterKind === "THERMOMETER" && !pointB)) return null;
+    if (definition.parameterKind === "RADAR") return { center: pointA, radiusMeters };
+    if (definition.parameterKind === "THERMOMETER") return { start: pointA, end: pointB };
+    if (definition.parameterKind === "POINT") return { referencePoint: pointA };
+    return {
+      referencePoint: pointA,
+      ...(datasetId ? { datasetId } : {}),
+      ...(note ? { note } : {}),
+    };
+  }
+
   useEffect(() => {
     if (!pickedPoint) return;
     if (pickedPoint.target === "A") setPointA(pickedPoint.point);
     else setPointB(pickedPoint.point);
   }, [pickedPoint]);
+
+  useEffect(() => {
+    const parameters = currentParameters();
+    if (!parameters || (definition.parameterKind === "DATASET" && !datasetId)) {
+      onPreviewChange(null);
+      return;
+    }
+    try {
+      const preview = buildQuestionArtifacts(definitionId, parameters, null, {
+        boundary: state.game.boundary,
+        subdivisions: state.game.subdivisions,
+        datasets: state.datasets,
+      }).artifacts.visualization;
+      onPreviewChange(preview);
+    } catch {
+      onPreviewChange(null);
+    }
+  }, [definitionId, pointA, pointB, radiusMeters, datasetId, note, state, onPreviewChange]);
 
   function useGps(target: "A" | "B") {
     if (!localPosition) return onRequestGps(target);
@@ -136,17 +172,11 @@ export function QuestionComposer({
       onError("Select the required point on the map first.");
       return;
     }
-    let parameters: Record<string, unknown>;
-    if (definition.parameterKind === "RADAR") parameters = { center: pointA, radiusMeters };
-    else if (definition.parameterKind === "THERMOMETER")
-      parameters = { start: pointA, end: pointB };
-    else if (definition.parameterKind === "POINT") parameters = { referencePoint: pointA };
-    else
-      parameters = {
-        referencePoint: pointA,
-        ...(datasetId ? { datasetId } : {}),
-        ...(note ? { note } : {}),
-      };
+    if (definition.parameterKind === "DATASET" && !definition.exactRulePending && !datasetId) {
+      onError("Choose the place dataset for this question.");
+      return;
+    }
+    const parameters = currentParameters()!;
     setBusy(true);
     try {
       if (question) await patch(`/api/questions/${question.id}`, { parameters }, token);
@@ -164,127 +194,326 @@ export function QuestionComposer({
   if (pickingFromMap) return null;
 
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section
-        className="sheet composer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="question-title"
-      >
-        <div className="sheet-header">
-          <div>
-            <p className="eyebrow">Draft planning</p>
-            <h2 id="question-title">{question ? "Edit question" : "Ask a question"}</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close">
-            <X />
-          </button>
+    <aside className="question-sidebar sheet composer" aria-labelledby="question-title">
+      <div className="sheet-header">
+        <div>
+          <p className="eyebrow">Draft planning</p>
+          <h2 id="question-title">{question ? "Edit question" : "Ask a question"}</h2>
         </div>
-        <form className="form-stack" onSubmit={submit}>
+        <button className="icon-button" onClick={onClose} aria-label="Close">
+          <X />
+        </button>
+      </div>
+      <form className="form-stack" onSubmit={submit}>
+        <label>
+          Question type
+          <select
+            value={definitionId}
+            disabled={Boolean(question)}
+            onChange={(event) => setDefinitionId(event.target.value)}
+          >
+            {allowed.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="definition-copy">{definition.description}</p>
+        {question?.askedAt ? (
+          <p className="usage-preview">
+            Official use {question.usageNumber} · cost {question.cost}
+          </p>
+        ) : nextCost !== null ? (
+          <p className="usage-preview">
+            Used{" "}
+            {previousUses === 0 ? "never" : `${previousUses} time${previousUses === 1 ? "" : "s"}`}
+            {` · next use ${previousUses + 1} · cost ${nextCost}`}
+          </p>
+        ) : null}
+        {definition.exactRulePending && (
+          <p className="notice">
+            <HelpCircle size={18} />
+            Tracking only: no Possible Area effect is configured yet.
+          </p>
+        )}
+        <PointPicker
+          label={
+            definition.parameterKind === "THERMOMETER"
+              ? "Start point"
+              : definition.parameterKind === "RADAR"
+                ? "Radius centre"
+                : "Reference point"
+          }
+          point={pointA}
+          onMap={() => onPickFromMap("A")}
+          onGps={() => useGps("A")}
+        />
+        {definition.parameterKind === "RADAR" && (
           <label>
-            Question type
-            <select
-              value={definitionId}
-              disabled={Boolean(question)}
-              onChange={(event) => setDefinitionId(event.target.value)}
-            >
-              {allowed.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
+            Radius (metres)
+            <input
+              type="number"
+              min={10}
+              max={1000000}
+              value={radiusMeters}
+              onChange={(event) => setRadiusMeters(Number(event.target.value))}
+              required
+            />
           </label>
-          <p className="definition-copy">{definition.description}</p>
-          {question?.askedAt ? (
-            <p className="usage-preview">
-              Official use {question.usageNumber} · cost {question.cost}
-            </p>
-          ) : nextCost !== null ? (
-            <p className="usage-preview">
-              Used{" "}
-              {previousUses === 0
-                ? "never"
-                : `${previousUses} time${previousUses === 1 ? "" : "s"}`}
-              {` · next use ${previousUses + 1} · cost ${nextCost}`}
-            </p>
-          ) : null}
-          {definition.exactRulePending && (
-            <p className="notice">
-              <HelpCircle size={18} />
-              Tracking only: no Possible Area effect is configured yet.
-            </p>
-          )}
-          <PointPicker
-            label={
-              definition.parameterKind === "THERMOMETER"
-                ? "Start point"
-                : definition.parameterKind === "RADAR"
-                  ? "Radius centre"
-                  : "Reference point"
-            }
-            point={pointA}
-            onMap={() => onPickFromMap("A")}
-            onGps={() => useGps("A")}
-          />
-          {definition.parameterKind === "RADAR" && (
-            <label>
-              Radius (metres)
-              <input
-                type="number"
-                min={10}
-                max={1000000}
-                value={radiusMeters}
-                onChange={(event) => setRadiusMeters(Number(event.target.value))}
-                required
-              />
-            </label>
-          )}
-          {definition.parameterKind === "THERMOMETER" && (
+        )}
+        {definition.parameterKind === "THERMOMETER" && (
+          <>
             <PointPicker
               label="End point"
               point={pointB}
               onMap={() => onPickFromMap("B")}
               onGps={() => useGps("B")}
             />
-          )}
-          {definition.parameterKind === "DATASET" && (
-            <>
-              <label>
-                Dataset
-                <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-                  <option value="">Choose later</option>
-                  {datasets.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Rule note (optional)
-                <textarea
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  maxLength={500}
-                />
-              </label>
-            </>
-          )}
-          <div className="sheet-actions">
-            <button type="button" className="button secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              className="button primary"
-              disabled={busy || !pointA || (definition.parameterKind === "THERMOMETER" && !pointB)}
+            <div className="geometry-legend" aria-label="Thermometer map legend">
+              <span>
+                <i className="legend-dot start" />
+                Start / colder
+              </span>
+              <span>
+                <i className="legend-dot end" />
+                End / hotter
+              </span>
+              <span>
+                <i className="legend-line" />
+                Answer boundary
+              </span>
+            </div>
+          </>
+        )}
+        {definition.parameterKind === "DATASET" && (
+          <>
+            <label>
+              Dataset
+              <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
+                <option value="">Choose later</option>
+                {datasets.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!definition.exactRulePending && (
+              <p className="field-help">
+                Every feature is treated as one map place. The question uses the nearest place
+                inside the game boundary.
+              </p>
+            )}
+            <label>
+              Rule note (optional)
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                maxLength={500}
+              />
+            </label>
+          </>
+        )}
+        <div className="sheet-actions">
+          <button type="button" className="button secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary"
+            disabled={busy || !pointA || (definition.parameterKind === "THERMOMETER" && !pointB)}
+          >
+            {question ? "Save changes" : "Create draft"}
+          </button>
+        </div>
+      </form>
+    </aside>
+  );
+}
+
+interface ActivityProps extends CommonProps {
+  questions: QuestionInstance[];
+  localPosition: [number, number] | null;
+  onRequestGps: () => void;
+  onEdit: (question: QuestionInstance) => void;
+  onSelect: (id: string) => void;
+}
+
+export function QuestionActivitySidebar({
+  state,
+  token,
+  refresh,
+  onError,
+  questions,
+  localPosition,
+  onRequestGps,
+  onEdit,
+  onSelect,
+}: ActivityProps) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function action(question: QuestionInstance, path: string, body: unknown = {}) {
+    setBusyId(question.id);
+    try {
+      await post(`/api/questions/${question.id}/${path}`, body, token);
+      onSelect(question.id);
+      await refresh();
+      onError(null);
+    } catch (cause) {
+      onError((cause as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <aside
+      className="question-sidebar sheet activity-sidebar"
+      aria-labelledby="active-question-title"
+    >
+      <div className="sheet-header">
+        <div>
+          <p className="eyebrow">Current workflow</p>
+          <h2 id="active-question-title">
+            {questions.length === 1 ? "Open question" : `${questions.length} open questions`}
+          </h2>
+        </div>
+      </div>
+      <div className="activity-list">
+        {questions.map((question) => {
+          const definition = getQuestionDefinition(question.definitionId);
+          const datasetId =
+            typeof question.parameters.datasetId === "string"
+              ? question.parameters.datasetId
+              : null;
+          const dataset = datasetId ? state.datasets.find((item) => item.id === datasetId) : null;
+          const canAnswer =
+            question.status === "PENDING" &&
+            ((state.game.hiderAssistance && state.me.role === "HIDER") ||
+              (!state.game.hiderAssistance && state.me.role === "SEEKER"));
+          let localEvaluation: ReturnType<typeof evaluateQuestionAtPosition> = null;
+          if (state.me.role === "HIDER" && localPosition && question.status === "PENDING") {
+            try {
+              localEvaluation = evaluateQuestionAtPosition(
+                question.definitionId,
+                question.parameters,
+                localPosition,
+                {
+                  boundary: state.game.boundary,
+                  subdivisions: state.game.subdivisions,
+                  datasets: state.datasets,
+                },
+              );
+            } catch {
+              localEvaluation = null;
+            }
+          }
+          return (
+            <article
+              className="active-question-card"
+              key={question.id}
+              onClick={() => onSelect(question.id)}
             >
-              {question ? "Save changes" : "Create draft"}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
+              <div className="question-heading">
+                <span className={`status ${question.status.toLowerCase()}`}>{question.status}</span>
+                <span className="category">{question.category}</span>
+              </div>
+              <h3>{question.displayName}</h3>
+              {dataset && (
+                <p className="dataset-callout">
+                  <strong>Selected places:</strong> {dataset.name}
+                </p>
+              )}
+              <p className="question-prompt">
+                {question.definitionId === "matching.dataset" && dataset
+                  ? `Is your nearest ${dataset.name} place the same as the Seeker's nearest?`
+                  : question.definitionId === "measuring.dataset" && dataset
+                    ? `Compared with the Seeker, are you closer to or further from the nearest ${dataset.name} place?`
+                    : definition.description}
+              </p>
+              {state.me.role === "HIDER" && question.status === "PENDING" && !localPosition && (
+                <div className="local-evaluation missing-location">
+                  <strong>Location needed to check this answer.</strong>
+                  <button className="button secondary small-button" onClick={onRequestGps}>
+                    Use my location
+                  </button>
+                </div>
+              )}
+              {localEvaluation && (
+                <div className="local-evaluation">
+                  <strong>{localEvaluation.summary}</strong>
+                  {localEvaluation.details.map((detail) => (
+                    <span key={detail}>{detail}</span>
+                  ))}
+                  <span className="suggested-answer">
+                    Suggested answer:{" "}
+                    {definition.answers.find((option) => option.value === localEvaluation.answer)
+                      ?.label ?? localEvaluation.answer}
+                  </span>
+                </div>
+              )}
+              {question.answer && (
+                <p className="answer">
+                  Answer:{" "}
+                  <strong>
+                    {definition.answers.find((option) => option.value === question.answer)?.label ??
+                      question.answer}
+                  </strong>
+                </p>
+              )}
+              {question.status === "ANSWERED" && state.me.role === "SEEKER" && (
+                <p className="apply-notice">
+                  The answer area is previewed on the map. Apply it to update Possible Area.
+                </p>
+              )}
+              {question.status === "PENDING" && !canAnswer && (
+                <p className="waiting-copy">Waiting for the Hider's answer.</p>
+              )}
+              <div className="card-actions" onClick={(event) => event.stopPropagation()}>
+                {state.me.role === "SEEKER" && question.status === "DRAFT" && (
+                  <>
+                    <button className="button subtle small-button" onClick={() => onEdit(question)}>
+                      Edit
+                    </button>
+                    <button
+                      className="button primary small-button"
+                      disabled={busyId === question.id}
+                      onClick={() => void action(question, "ask")}
+                    >
+                      <Send size={16} /> Ask
+                    </button>
+                  </>
+                )}
+                {canAnswer &&
+                  definition.answers.map((option) => (
+                    <button
+                      key={option.value}
+                      className={
+                        localEvaluation?.answer === option.value
+                          ? "button primary small-button"
+                          : "button answer-button"
+                      }
+                      disabled={busyId === question.id}
+                      onClick={() => void action(question, "answer", { answer: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                {state.me.role === "SEEKER" && question.status === "ANSWERED" && (
+                  <button
+                    className="button primary wide"
+                    disabled={busyId === question.id}
+                    onClick={() => void action(question, "apply")}
+                  >
+                    <Check size={17} /> Apply to Possible Area
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 

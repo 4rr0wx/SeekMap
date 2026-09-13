@@ -534,8 +534,8 @@ export class GameStore {
   resetGame(token: string | undefined): void {
     this.requireSeeker(token);
     const game = this.currentRow();
-    if (!game || game.lifecycle !== "ENDED")
-      throw new DomainError("End the game before clearing it", 409);
+    if (!game || (game.lifecycle !== "ENDED" && game.phase !== "LOBBY"))
+      throw new DomainError("Only a lobby setup or ended game can be cleared", 409);
     this.db.delete(games).where(eq(games.id, game.id)).run();
   }
 

@@ -22,7 +22,9 @@ export function saveIdentity(identity: Identity | null): void {
 
 export async function api<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(init.headers);
-  if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  if (init.body != null && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(path, { ...init, headers });
   const body = (await response.json().catch(() => ({}))) as { error?: string } & T;

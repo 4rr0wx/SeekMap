@@ -93,6 +93,12 @@ export const datasetQuestionParametersSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+export const placeQuestionParametersSchema = z.object({
+  referencePoint: positionSchema,
+  datasetId: z.string().uuid(),
+  note: z.string().trim().max(500).optional(),
+});
+
 export const createQuestionSchema = z.object({
   definitionId: z.string().min(1).max(100),
   parameters: z.record(z.string(), z.unknown()),

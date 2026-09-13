@@ -17,7 +17,8 @@ The project takes its geographic question primitives and category vocabulary fro
 - DRAFT → PENDING → ANSWERED → APPLIED question lifecycle.
 - Real geographic effects for Radar, Thermometer, and cached First Division Matching.
 - Data-driven usage counts and repeat costs.
-- Explicit extension points for Tentacles, dataset Matching, and dataset Measuring. These track questions and answers but intentionally do not invent uncertain geographic rules.
+- Dataset-backed Matching and Measuring questions using the nearest in-boundary place represented by each imported feature's map point.
+- An explicit tracking-only extension point for Tentacles until its exact workflow is implemented.
 - Optional Hider Question Assistance.
 - Reusable, optional KML/KMZ library copied into each selected game and converted to stored GeoJSON.
 - OSM/Overpass subdivision and train/light-rail/subway/tram layers; buses are excluded.
@@ -92,7 +93,7 @@ With no current game, the creation screen lists the persistent dataset library. 
 
 During a game, Seekers can still open Data to add, replace, categorize, or remove game datasets. New in-game uploads are also added to the reusable library. The server enforces the configured byte limit, parses uploads in memory, extracts KML from KMZ archives, accepts standard Point/MultiPoint/LineString/MultiLineString/Polygon/MultiPolygon features, preserves names and safe scalar properties, and persists normalized GeoJSON. Raw uploads and filename-derived paths are never written to disk.
 
-Tentacles, Matching, and Measuring can each select any imported dataset. The supplied category files are POI collections; the definitions do not claim an exact geographic effect until the corresponding rules are specified.
+Tentacles, Matching, and Measuring can each select any imported dataset. Matching compares whether the Hider and Seeker have the same nearest in-boundary place. Measuring compares each player's distance to their own nearest in-boundary place. Point features are used directly; other feature types use a representative point on the feature, matching the game's map-icon measurement convention. Tentacles remains tracking-only until its dedicated workflow is implemented.
 
 ## Development
 
@@ -136,7 +137,8 @@ This is not an application authentication system. Device tokens exist only to se
 
 ## Known limitations
 
-- Tentacles, generic dataset Matching, and generic dataset Measuring are tracking-only extension points until their exact house-game rules are specified.
+- Tentacles is a tracking-only extension point until its dedicated workflow is specified.
+- A game currently supports one OSM administrative area; composing adjacent areas such as Lower Austria plus Vienna is future work.
 - First Division and transit completeness depends on local OpenStreetMap tagging and the selected admin level.
 - Transit loading currently uses a bounding-box Overpass query and may be expensive for very large regions.
 - Public OSM tile/Nominatim/Overpass services should not be treated as an SLA-backed production dependency.
