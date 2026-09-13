@@ -96,7 +96,7 @@ function thermometerPlane(
     (projectedStart[0] + projectedEnd[0]) / 2,
     (projectedStart[1] + projectedEnd[1]) / 2,
   ];
-  const perpendicular: [number, number] = [-delta[1] / length, delta[0] / length];
+  const perpendicular: [number, number] = [delta[1] / length, -delta[0] / length];
   const targetDirection: [number, number] =
     target === "END"
       ? [delta[0] / length, delta[1] / length]
