@@ -3,6 +3,7 @@ import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibr
 import * as turf from "@turf/turf";
 import type { Feature, FeatureCollection, Geometry, Point } from "geojson";
 import {
+  radarCircle,
   thermometerDivider,
   type GameState,
   type MapFeature,
@@ -85,6 +86,8 @@ export function GameMap({
   const layersRef = useRef(layers);
   onClickRef.current = onMapClick;
   layersRef.current = layers;
+
+  const syncDataRef = useRef<() => void>(() => {});
 
   const visibleStations = useMemo(() => {
     const source = state.game.transitStations;
@@ -178,8 +181,27 @@ export function GameMap({
             },
           ]
         : [];
+    const radarFallback =
+      draftQuestionActive && start && !end && draftFeatures.length === 0
+        ? [
+            turf.point(start, {
+              artifactRole: "seeker-reference",
+              label: "Radar centre",
+              selected: true,
+              preview: true,
+            }),
+            {
+              ...radarCircle(start, 1000),
+              properties: {
+                artifactRole: "candidate-region",
+                selected: true,
+                preview: true,
+              },
+            },
+          ]
+        : [];
 
-    const rawFeatures = [...persisted, ...preview, ...thermometerFallback].filter(
+    const rawFeatures = [...persisted, ...preview, ...thermometerFallback, ...radarFallback].filter(
       Boolean,
     ) as MapFeature[];
     const searchArea = state.game.possibleArea ?? state.game.boundary;
@@ -300,7 +322,7 @@ export function GameMap({
         id: "question-fill",
         type: "fill",
         source: "questions",
-        filter: ["==", ["geometry-type"], "Polygon"],
+        filter: ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]],
         paint: {
           "fill-color": [
             "case",
@@ -505,21 +527,7 @@ export function GameMap({
           "circle-stroke-width": MAP_COLORS.localGpsStrokeWidth,
         },
       });
-      setData(map, "boundary", state.game.boundary);
-      setData(map, "possible", state.game.possibleArea ?? empty);
-      setData(map, "questions", questionGeometry);
-      setData(map, "admin", state.game.subdivisions ?? empty);
-      setData(map, "transit-lines", state.game.transitLines ?? empty);
-      setData(map, "transit-stations", visibleStations);
-      setData(map, "datasets", importedDatasets);
-      setData(
-        map,
-        "markers",
-        collection((state.seekerMarkers ?? []).map((marker) => marker.position)),
-      );
-      setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
-      setData(map, "question-draft-point", liveDraftPoints);
-      applyLayerVisibility(map, layersRef.current);
+      syncDataRef.current();
       const bounds = turf.bbox(state.game.boundary);
       map.fitBounds(
         [
@@ -537,7 +545,7 @@ export function GameMap({
     };
   }, [config.tileAttribution, config.tileUrl, state.game.boundary]);
 
-  useEffect(() => {
+  syncDataRef.current = () => {
     const map = mapRef.current;
     if (!map?.isStyleLoaded()) return;
     setData(map, "boundary", state.game.boundary);
@@ -556,6 +564,10 @@ export function GameMap({
     setData(map, "question-draft-point", liveDraftPoints);
     setData(map, "measurement", measurement.length === 2 ? turf.lineString(measurement) : empty);
     applyLayerVisibility(map, layers);
+  };
+
+  useEffect(() => {
+    syncDataRef.current();
   }, [
     state,
     layers,
