@@ -1,3 +1,7 @@
+import * as turf from "@turf/turf";
+import type { Feature, Polygon, MultiPolygon } from "geojson";
+import { intersectAreas, type AreaFeature, type MapFeature } from "@hideseek/shared";
+
 export const MAP_COLORS = {
   // Game Boundary
   boundaryFill: "#13221f",
@@ -173,7 +177,7 @@ export const MAP_LEGEND_SECTIONS: LegendSection[] = [
         id: "active-question",
         label: "Active Question Area",
         description:
-          "The geographic area currently tested or kept by an answered question (e.g. radar radius or answer zone).",
+          "The geographic area tested or kept by an answered question (clipped to the active search area so only remaining possible territory is shaded).",
         type: "area",
         swatch: {
           fill: "rgba(240, 106, 71, 0.22)",
@@ -190,6 +194,18 @@ export const MAP_LEGEND_SECTIONS: LegendSection[] = [
         swatch: {
           stroke: MAP_COLORS.questionDividerLine,
           strokeWidth: 2.5,
+          dashed: true,
+        },
+      },
+      {
+        id: "question-scope",
+        label: "Question Geometric Scope",
+        description:
+          "Dashed outline showing the overall reach of the question tool across the map without misleading fill.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.questionSelectedLine,
+          strokeWidth: 1.5,
           dashed: true,
         },
       },
@@ -316,3 +332,70 @@ export const MAP_LEGEND_SECTIONS: LegendSection[] = [
     ],
   },
 ];
+
+export function processQuestionFeatures(
+  features: MapFeature[],
+  searchArea: AreaFeature | null,
+): MapFeature[] {
+  const result: MapFeature[] = [];
+
+  for (const feature of features) {
+    const isPolygon =
+      feature.geometry.type === "Polygon" || feature.geometry.type === "MultiPolygon";
+
+    if (isPolygon) {
+      // 1. Generate an unclipped boundary line (scope) so players can see the full
+      // question tool's geometric boundary across the map without misleading fill.
+      try {
+        const line = turf.polygonToLine(feature as Feature<Polygon | MultiPolygon>);
+        if (line) {
+          if (line.type === "FeatureCollection") {
+            for (const f of line.features) {
+              result.push({
+                ...f,
+                properties: {
+                  ...(feature.properties ?? {}),
+                  artifactRole: "question-scope",
+                },
+              } as MapFeature);
+            }
+          } else {
+            result.push({
+              ...line,
+              properties: {
+                ...(feature.properties ?? {}),
+                artifactRole: "question-scope",
+              },
+            } as MapFeature);
+          }
+        }
+      } catch {
+        // Ignore scope line generation failure
+      }
+
+      // 2. Clip the polygon to the active search area (Possible Area) so
+      // areas that have already been excluded by previous questions are never filled.
+      if (searchArea) {
+        try {
+          const clipped = intersectAreas(feature as AreaFeature, searchArea);
+          if (clipped) {
+            result.push({
+              ...clipped,
+              properties: {
+                ...(feature.properties ?? {}),
+              },
+            } as MapFeature);
+          }
+        } catch {
+          result.push(feature);
+        }
+      } else {
+        result.push(feature);
+      }
+    } else {
+      result.push(feature);
+    }
+  }
+
+  return result;
+}

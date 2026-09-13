@@ -1,5 +1,7 @@
+import * as turf from "@turf/turf";
+import type { AreaFeature, MapFeature } from "@hideseek/shared";
 import { describe, expect, it } from "vitest";
-import { MAP_COLORS, MAP_LEGEND_SECTIONS } from "./mapTheme";
+import { MAP_COLORS, MAP_LEGEND_SECTIONS, processQuestionFeatures } from "./mapTheme";
 
 describe("MAP_COLORS", () => {
   it("defines valid hex colors for all color properties", () => {
@@ -86,6 +88,7 @@ describe("MAP_LEGEND_SECTIONS", () => {
     expect(allItemIds).toContain("game-boundary");
     expect(allItemIds).toContain("active-question");
     expect(allItemIds).toContain("decision-boundary");
+    expect(allItemIds).toContain("question-scope");
     expect(allItemIds).toContain("point-a");
     expect(allItemIds).toContain("point-b");
     expect(allItemIds).toContain("transit-lines");
@@ -94,5 +97,97 @@ describe("MAP_LEGEND_SECTIONS", () => {
     expect(allItemIds).toContain("seeker-markers");
     expect(allItemIds).toContain("measurement");
     expect(allItemIds).toContain("my-location");
+  });
+});
+
+describe("processQuestionFeatures", () => {
+  const searchArea: AreaFeature = turf.polygon([
+    [
+      [0, 0],
+      [10, 0],
+      [10, 10],
+      [0, 10],
+      [0, 0],
+    ],
+  ]);
+
+  it("clips question polygon to the active search area so eliminated territory is not filled", () => {
+    // Question polygon extending from 5 to 15 (half inside, half outside search area [0..10])
+    const questionPoly = turf.polygon(
+      [
+        [
+          [5, 0],
+          [15, 0],
+          [15, 10],
+          [5, 10],
+          [5, 0],
+        ],
+      ],
+      { artifactRole: "answer-region", selected: true },
+    ) as MapFeature;
+
+    const processed = processQuestionFeatures([questionPoly], searchArea);
+
+    const scopeLine = processed.find((f) => f.properties?.artifactRole === "question-scope");
+    expect(scopeLine).toBeDefined();
+
+    const polygonFeatures = processed.filter(
+      (f) => f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon",
+    );
+    expect(polygonFeatures.length).toBe(1);
+
+    const clipped = polygonFeatures[0];
+    expect(clipped).toBeDefined();
+    if (!clipped) {
+      throw new Error("Expected clipped polygon to be defined");
+    }
+    expect(clipped.properties?.artifactRole).toBe("answer-region");
+
+    // The clipped polygon must not extend past x = 10 (the search area boundary)
+    const bbox = turf.bbox(clipped);
+    expect(bbox[0]).toBeCloseTo(5);
+    expect(bbox[2]).toBeCloseTo(10); // clipped at 10, not extending to 15!
+  });
+
+  it("drops polygon fill entirely if the question does not overlap the search area", () => {
+    // Question polygon completely outside search area [0..10]
+    const outsidePoly = turf.polygon(
+      [
+        [
+          [20, 20],
+          [30, 20],
+          [30, 30],
+          [20, 30],
+          [20, 20],
+        ],
+      ],
+      { artifactRole: "candidate-region" },
+    ) as MapFeature;
+
+    const processed = processQuestionFeatures([outsidePoly], searchArea);
+
+    // No polygon features should remain (no misleading fill)
+    const polygonFeatures = processed.filter(
+      (f) => f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon",
+    );
+    expect(polygonFeatures.length).toBe(0);
+
+    // But the scope line is still available for geometric orientation
+    const scopeLine = processed.find((f) => f.properties?.artifactRole === "question-scope");
+    expect(scopeLine).toBeDefined();
+  });
+
+  it("passes non-polygon features (lines, points) through unmodified", () => {
+    const point = turf.point([5, 5], { artifactRole: "point-a" }) as MapFeature;
+    const line = turf.lineString(
+      [
+        [0, 5],
+        [10, 5],
+      ],
+      { artifactRole: "decision-boundary" },
+    ) as MapFeature;
+
+    const processed = processQuestionFeatures([point, line], searchArea);
+    expect(processed).toEqual([point, line]);
   });
 });

@@ -9,7 +9,7 @@ import {
   type MapFeatureCollection,
   type PublicConfig,
 } from "@hideseek/shared";
-import { MAP_COLORS } from "../mapTheme";
+import { MAP_COLORS, processQuestionFeatures } from "../mapTheme";
 
 export interface MapLayers {
   possibleArea: boolean;
@@ -49,12 +49,13 @@ function visibility(map: MapLibreMap, layer: string, visible: boolean) {
   if (map.getLayer(layer)) map.setLayoutProperty(layer, "visibility", visible ? "visible" : "none");
 }
 
-function applyLayerVisibility(map: MapLibreMap, layers: MapLayers, questionFocused = false) {
+function applyLayerVisibility(map: MapLibreMap, layers: MapLayers) {
   visibility(map, "possible-fill", layers.possibleArea);
-  visibility(map, "possible-line", layers.possibleArea && !questionFocused);
+  visibility(map, "possible-line", layers.possibleArea);
   visibility(map, "question-fill", layers.questionGeometry);
   visibility(map, "question-line", layers.questionGeometry);
   visibility(map, "question-divider-line", layers.questionGeometry);
+  visibility(map, "question-scope-line", layers.questionGeometry);
   visibility(map, "question-point", layers.questionGeometry);
   visibility(map, "admin-line", layers.administrative);
   visibility(map, "transit-line", layers.transitLines);
@@ -82,16 +83,8 @@ export function GameMap({
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onMapClick);
   const layersRef = useRef(layers);
-  const questionFocusedRef = useRef(false);
   onClickRef.current = onMapClick;
   layersRef.current = layers;
-
-  const selectedQuestion = selectedQuestionId
-    ? state.questions.find((question) => question.id === selectedQuestionId)
-    : null;
-  const questionFocused =
-    draftQuestionActive || Boolean(selectedQuestion && selectedQuestion.status !== "APPLIED");
-  questionFocusedRef.current = questionFocused;
 
   const visibleStations = useMemo(() => {
     const source = state.game.transitStations;
@@ -185,9 +178,15 @@ export function GameMap({
             },
           ]
         : [];
-    return collection([...persisted, ...preview, ...thermometerFallback]);
+
+    const rawFeatures = [...persisted, ...preview, ...thermometerFallback].filter(
+      Boolean,
+    ) as MapFeature[];
+    const searchArea = state.game.possibleArea ?? state.game.boundary;
+    return collection(processQuestionFeatures(rawFeatures, searchArea));
   }, [
     state.game.boundary,
+    state.game.possibleArea,
     state.questions,
     selectedQuestionId,
     draftQuestionActive,
@@ -331,6 +330,7 @@ export function GameMap({
           "all",
           ["!=", ["get", "artifactRole"], "decision-boundary"],
           ["!=", ["get", "artifactRole"], "candidate-region"],
+          ["!=", ["get", "artifactRole"], "question-scope"],
         ],
         paint: {
           "line-color": [
@@ -364,6 +364,18 @@ export function GameMap({
           "line-color": MAP_COLORS.questionDividerLine,
           "line-width": MAP_COLORS.questionDividerLineWidth,
           "line-dasharray": [...MAP_COLORS.questionDividerDash],
+        },
+      });
+      map.addLayer({
+        id: "question-scope-line",
+        type: "line",
+        source: "questions",
+        filter: ["==", ["get", "artifactRole"], "question-scope"],
+        paint: {
+          "line-color": MAP_COLORS.questionSelectedLine,
+          "line-width": 1.5,
+          "line-dasharray": [3, 2],
+          "line-opacity": 0.55,
         },
       });
       map.addLayer({
@@ -507,7 +519,7 @@ export function GameMap({
       );
       setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
       setData(map, "question-draft-point", liveDraftPoints);
-      applyLayerVisibility(map, layersRef.current, questionFocusedRef.current);
+      applyLayerVisibility(map, layersRef.current);
       const bounds = turf.bbox(state.game.boundary);
       map.fitBounds(
         [
@@ -543,7 +555,7 @@ export function GameMap({
     setData(map, "local-position", localPosition ? turf.point(localPosition) : empty);
     setData(map, "question-draft-point", liveDraftPoints);
     setData(map, "measurement", measurement.length === 2 ? turf.lineString(measurement) : empty);
-    applyLayerVisibility(map, layers, questionFocused);
+    applyLayerVisibility(map, layers);
   }, [
     state,
     layers,
@@ -552,7 +564,6 @@ export function GameMap({
     liveDraftPoints,
     measurement,
     questionGeometry,
-    questionFocused,
     visibleStations,
     importedDatasets,
   ]);
