@@ -478,27 +478,78 @@ export const QUESTION_DEFINITIONS: readonly QuestionDefinition[] = [
 ];
 
 export interface LocalQuestionEvaluation {
-  answer: string;
+  answer: string | null;
   summary: string;
   details: string[];
+}
+
+export interface QuestionReferenceInfo {
+  placeName?: string;
+  divisionName?: string;
+  distanceMeters?: number;
 }
 
 function formatMeters(distance: number): string {
   return distance < 1_000 ? `${Math.round(distance)} m` : `${(distance / 1_000).toFixed(2)} km`;
 }
 
+export function getQuestionReferenceInfo(
+  definitionId: string,
+  rawParameters: Record<string, unknown>,
+  context: QuestionContext,
+): QuestionReferenceInfo | null {
+  try {
+    const definition = getQuestionDefinition(definitionId);
+    const parameters = definition.parametersSchema.parse(rawParameters) as Record<string, unknown>;
+    if (definitionId === "matching.dataset" || definitionId === "measuring.dataset") {
+      const dataset = datasetFor(String(parameters.datasetId), context);
+      const places = datasetPlaces(dataset, context.boundary);
+      const seeker = nearestDatasetPlace(places, parameters.referencePoint as [number, number]);
+      if (!seeker) return null;
+      return {
+        placeName: seeker.name,
+        distanceMeters: seeker.distanceMeters,
+      };
+    }
+    if (definitionId === "matching.first-division") {
+      if (!context.subdivisions) return null;
+      const reference = findContainingArea(
+        context.subdivisions,
+        parameters.referencePoint as [number, number],
+      );
+      if (!reference) return null;
+      const divisionName =
+        (reference.properties?.name as string) ??
+        (reference.properties?.["name:en"] as string) ??
+        undefined;
+      return { divisionName };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function evaluateQuestionAtPosition(
   definitionId: string,
   rawParameters: Record<string, unknown>,
-  position: [number, number],
+  position: [number, number] | null,
   context: QuestionContext,
 ): LocalQuestionEvaluation | null {
   const definition = getQuestionDefinition(definitionId);
   const parameters = definition.parametersSchema.parse(rawParameters) as Record<string, unknown>;
   if (definitionId === "radar.standard") {
     const center = parameters.center as [number, number];
+    const radiusMeters = Number(parameters.radiusMeters ?? 1000);
+    if (!position) {
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: [`Radius: ${formatMeters(radiusMeters)}`],
+      };
+    }
     const distance = turf.distance(position, center, { units: "meters" });
-    const inside = distance <= Number(parameters.radiusMeters);
+    const inside = distance <= radiusMeters;
     return {
       answer: inside ? "INSIDE" : "OUTSIDE",
       summary: inside ? "You are inside the radius." : "You are outside the radius.",
@@ -506,6 +557,13 @@ export function evaluateQuestionAtPosition(
     };
   }
   if (definitionId === "thermometer.standard") {
+    if (!position) {
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: [],
+      };
+    }
     const start = parameters.start as [number, number];
     const end = parameters.end as [number, number];
     const startDistance = turf.distance(position, start, { units: "meters" });
@@ -525,8 +583,22 @@ export function evaluateQuestionAtPosition(
       context.subdivisions,
       parameters.referencePoint as [number, number],
     );
+    if (!reference) return null;
+    const refName =
+      (reference.properties?.name as string) ??
+      (reference.properties?.["name:en"] as string) ??
+      null;
+    if (!position) {
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: refName ? [`Seeker: ${refName}`] : [],
+      };
+    }
     const local = findContainingArea(context.subdivisions, position);
-    if (!reference || !local) return null;
+    if (!local) return null;
+    const localName =
+      (local.properties?.name as string) ?? (local.properties?.["name:en"] as string) ?? null;
     const same =
       reference === local || JSON.stringify(reference.geometry) === JSON.stringify(local.geometry);
     return {
@@ -534,15 +606,33 @@ export function evaluateQuestionAtPosition(
       summary: same
         ? "You are in the same division as the Seeker."
         : "You are in a different division from the Seeker.",
-      details: [],
+      details: [
+        ...(refName ? [`Seeker: ${refName}`] : []),
+        ...(localName ? [`You: ${localName}`] : []),
+      ],
     };
   }
   if (definitionId === "matching.dataset" || definitionId === "measuring.dataset") {
     const dataset = datasetFor(String(parameters.datasetId), context);
     const places = datasetPlaces(dataset, context.boundary);
     const seeker = nearestDatasetPlace(places, parameters.referencePoint as [number, number]);
+    if (!seeker) return null;
+    if (!position) {
+      if (definitionId === "matching.dataset") {
+        return {
+          answer: null,
+          summary: "Location needed to check this answer.",
+          details: [`Seeker: ${seeker.name}`],
+        };
+      }
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: [`Seeker: ${seeker.name} · ${formatMeters(seeker.distanceMeters)}`],
+      };
+    }
     const hider = nearestDatasetPlace(places, position);
-    if (!seeker || !hider) return null;
+    if (!hider) return null;
     if (definitionId === "matching.dataset") {
       const same = seeker.index === hider.index;
       return {
@@ -573,9 +663,18 @@ export function evaluateQuestionAtPosition(
     const places = datasetPlaces(dataset, context.boundary);
     const center = parameters.referencePoint as [number, number];
     const radiusMeters = Number(parameters.radiusMeters ?? 10_000);
-    const distanceToCenter = turf.distance(position, center, { units: "meters" });
     const candidates = candidateTentaclePlaces(places, center, radiusMeters);
-
+    if (!position) {
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: [
+          `Radius: ${formatMeters(radiusMeters)}`,
+          `${candidates.length} candidate place${candidates.length === 1 ? "" : "s"} within radius`,
+        ],
+      };
+    }
+    const distanceToCenter = turf.distance(position, center, { units: "meters" });
     if (distanceToCenter > radiusMeters) {
       return {
         answer: "OUTSIDE",
