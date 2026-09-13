@@ -14,6 +14,7 @@ import {
   buildQuestionArtifacts,
   calculateQuestionCost,
   evaluateQuestionAtPosition,
+  getQuestionAnswers,
   getQuestionDefinition,
   QUESTION_DEFINITIONS,
   type GameState,
@@ -129,6 +130,14 @@ export function QuestionComposer({
     if (definition.parameterKind === "RADAR") return { center: pointA, radiusMeters };
     if (definition.parameterKind === "THERMOMETER") return { start: pointA, end: pointB };
     if (definition.parameterKind === "POINT") return { referencePoint: pointA };
+    if (definition.category === "TENTACLES") {
+      return {
+        referencePoint: pointA,
+        radiusMeters,
+        ...(datasetId ? { datasetId } : {}),
+        ...(note ? { note } : {}),
+      };
+    }
     return {
       referencePoint: pointA,
       ...(datasetId ? { datasetId } : {}),
@@ -210,7 +219,13 @@ export function QuestionComposer({
           <select
             value={definitionId}
             disabled={Boolean(question)}
-            onChange={(event) => setDefinitionId(event.target.value)}
+            onChange={(event) => {
+              const nextId = event.target.value;
+              setDefinitionId(nextId);
+              if (nextId === "tentacles.dataset" && radiusMeters === 1000) {
+                setRadiusMeters(10000);
+              }
+            }}
           >
             {allowed.map((item) => (
               <option key={item.id} value={item.id}>
@@ -243,13 +258,15 @@ export function QuestionComposer({
               ? "Start point"
               : definition.parameterKind === "RADAR"
                 ? "Radius centre"
-                : "Reference point"
+                : definition.category === "TENTACLES"
+                  ? "Tentacle centre"
+                  : "Reference point"
           }
           point={pointA}
           onMap={() => onPickFromMap("A")}
           onGps={() => useGps("A")}
         />
-        {definition.parameterKind === "RADAR" && (
+        {(definition.parameterKind === "RADAR" || definition.category === "TENTACLES") && (
           <label>
             Radius (metres)
             <input
@@ -299,12 +316,16 @@ export function QuestionComposer({
                 ))}
               </select>
             </label>
-            {!definition.exactRulePending && (
+            {definition.category === "TENTACLES" ? (
+              <p className="field-help">
+                Active tentacles are places from this dataset within the chosen radius.
+              </p>
+            ) : !definition.exactRulePending ? (
               <p className="field-help">
                 Every feature is treated as one map place. The question uses the nearest place
                 inside the game boundary.
               </p>
-            )}
+            ) : null}
             <label>
               Rule note (optional)
               <textarea
@@ -315,6 +336,7 @@ export function QuestionComposer({
             </label>
           </>
         )}
+
         <div className="sheet-actions">
           <button type="button" className="button secondary" onClick={onClose}>
             Cancel
@@ -382,15 +404,19 @@ export function QuestionActivitySidebar({
       <div className="activity-list">
         {questions.map((question) => {
           const definition = getQuestionDefinition(question.definitionId);
-          const datasetId =
-            typeof question.parameters.datasetId === "string"
-              ? question.parameters.datasetId
-              : null;
-          const dataset = datasetId ? state.datasets.find((item) => item.id === datasetId) : null;
+          const dataset = question.parameters?.datasetId
+            ? state.datasets.find((item) => item.id === question.parameters.datasetId)
+            : null;
           const canAnswer =
             question.status === "PENDING" &&
             ((state.game.hiderAssistance && state.me.role === "HIDER") ||
               (!state.game.hiderAssistance && state.me.role === "SEEKER"));
+          const questionContext = {
+            boundary: state.game.boundary,
+            subdivisions: state.game.subdivisions,
+            datasets: state.datasets,
+          };
+          const answers = getQuestionAnswers(definition, question.parameters, questionContext);
           let localEvaluation: ReturnType<typeof evaluateQuestionAtPosition> = null;
           if (state.me.role === "HIDER" && localPosition && question.status === "PENDING") {
             try {
@@ -398,11 +424,7 @@ export function QuestionActivitySidebar({
                 question.definitionId,
                 question.parameters,
                 localPosition,
-                {
-                  boundary: state.game.boundary,
-                  subdivisions: state.game.subdivisions,
-                  datasets: state.datasets,
-                },
+                questionContext,
               );
             } catch {
               localEvaluation = null;
@@ -429,7 +451,9 @@ export function QuestionActivitySidebar({
                   ? `Is your nearest ${dataset.name} place the same as the Seeker's nearest?`
                   : question.definitionId === "measuring.dataset" && dataset
                     ? `Compared with the Seeker, are you closer to or further from the nearest ${dataset.name} place?`
-                    : definition.description}
+                    : question.definitionId === "tentacles.dataset" && dataset
+                      ? `Which nearby place in ${dataset.name} within the radius is the Hider closest to, or are they outside?`
+                      : definition.description}
               </p>
               {state.me.role === "HIDER" && question.status === "PENDING" && !localPosition && (
                 <div className="local-evaluation missing-location">
@@ -447,8 +471,8 @@ export function QuestionActivitySidebar({
                   ))}
                   <span className="suggested-answer">
                     Suggested answer:{" "}
-                    {definition.answers.find((option) => option.value === localEvaluation.answer)
-                      ?.label ?? localEvaluation.answer}
+                    {answers.find((option) => option.value === localEvaluation.answer)?.label ??
+                      localEvaluation.answer}
                   </span>
                 </div>
               )}
@@ -456,7 +480,7 @@ export function QuestionActivitySidebar({
                 <p className="answer">
                   Answer:{" "}
                   <strong>
-                    {definition.answers.find((option) => option.value === question.answer)?.label ??
+                    {answers.find((option) => option.value === question.answer)?.label ??
                       question.answer}
                   </strong>
                 </p>
@@ -485,7 +509,7 @@ export function QuestionActivitySidebar({
                   </>
                 )}
                 {canAnswer &&
-                  definition.answers.map((option) => (
+                  answers.map((option) => (
                     <button
                       key={option.value}
                       className={
@@ -617,6 +641,12 @@ export function QuestionHistory({
           )}
           {state.questions.map((question) => {
             const definition = getQuestionDefinition(question.definitionId);
+            const questionContext = {
+              boundary: state.game.boundary,
+              subdivisions: state.game.subdivisions,
+              datasets: state.datasets,
+            };
+            const answers = getQuestionAnswers(definition, question.parameters, questionContext);
             return (
               <article
                 key={question.id}
@@ -663,8 +693,8 @@ export function QuestionHistory({
                   <p className="answer">
                     Answer:{" "}
                     <strong>
-                      {definition.answers.find((option) => option.value === question.answer)
-                        ?.label ?? question.answer}
+                      {answers.find((option) => option.value === question.answer)?.label ??
+                        question.answer}
                     </strong>
                   </p>
                 )}
@@ -690,7 +720,7 @@ export function QuestionHistory({
                     </>
                   )}
                   {canAnswer(question) &&
-                    definition.answers.map((option) => (
+                    answers.map((option) => (
                       <button
                         key={option.value}
                         className="button answer-button"
@@ -721,7 +751,7 @@ export function QuestionHistory({
                   )}
                   {state.me.role === "SEEKER" &&
                     (question.status === "ANSWERED" || question.status === "APPLIED") &&
-                    definition.answers.map((option) => (
+                    answers.map((option) => (
                       <button
                         key={`revise-${option.value}`}
                         className="text-button"

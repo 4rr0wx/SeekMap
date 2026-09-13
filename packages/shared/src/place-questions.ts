@@ -1,6 +1,12 @@
 import * as turf from "@turf/turf";
 import type { Feature, Point } from "geojson";
-import { intersectAreas, normalizeArea, subtractArea, thermometerRegion } from "./geometry.js";
+import {
+  intersectAreas,
+  normalizeArea,
+  radarCircle,
+  subtractArea,
+  thermometerRegion,
+} from "./geometry.js";
 import type { AreaFeature, MapFeature, UploadedDataset } from "./types.js";
 
 export interface DatasetPlace {
@@ -42,6 +48,104 @@ export function nearestDatasetPlace(
     if (!nearest || distanceMeters < nearest.distanceMeters) nearest = { ...place, distanceMeters };
   }
   return nearest;
+}
+
+export function candidateTentaclePlaces(
+  places: DatasetPlace[],
+  referencePoint: [number, number],
+  radiusMeters: number,
+  maxCandidates = 15,
+): (DatasetPlace & { distanceMeters: number })[] {
+  const candidates = places
+    .map((place) => ({
+      ...place,
+      distanceMeters: turf.distance(referencePoint, place.point, { units: "meters" }),
+    }))
+    .filter((place) => place.distanceMeters <= radiusMeters)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+  return candidates.slice(0, maxCandidates);
+}
+
+export function tentaclePlaceRegion(
+  circleInBoundary: AreaFeature,
+  candidatePlaces: DatasetPlace[],
+  selected: DatasetPlace,
+): AreaFeature {
+  let region = circleInBoundary;
+  const selectedPosition = selected.point.geometry.coordinates as [number, number];
+  for (const other of candidatePlaces) {
+    if (other.index === selected.index) continue;
+    const otherPosition = other.point.geometry.coordinates as [number, number];
+    const nearerHalf = thermometerRegion(region, selectedPosition, otherPosition, "START");
+    const clipped = intersectAreas(region, nearerHalf);
+    if (!clipped) continue;
+    region = clipped;
+  }
+  return region;
+}
+
+export function tentaclesVisualizationFeatures(
+  dataset: UploadedDataset,
+  context: { boundary: AreaFeature },
+  referencePoint: [number, number],
+  radiusMeters: number,
+) {
+  const places = datasetPlaces(dataset, context.boundary);
+  if (places.length === 0) {
+    throw new Error(`${dataset.name} has no usable places inside the game boundary`);
+  }
+  const circle = radarCircle(referencePoint, radiusMeters);
+  const circleInBoundary = intersectAreas(context.boundary, circle);
+  const candidatePlaces = candidateTentaclePlaces(places, referencePoint, radiusMeters);
+  const common = { datasetId: dataset.id, datasetName: dataset.name };
+
+  const circleBoundaryLine = turf.polygonToLine(circle);
+  const boundaryFeatures = circleBoundaryLine
+    ? circleBoundaryLine.type === "FeatureCollection"
+      ? circleBoundaryLine.features.map((f) => ({
+          ...f,
+          properties: { ...common, artifactRole: "decision-boundary" },
+        }))
+      : [{ ...circleBoundaryLine, properties: { ...common, artifactRole: "decision-boundary" } }]
+    : [];
+
+  const tentacleArms = candidatePlaces.map((candidate) =>
+    turf.lineString([referencePoint, candidate.point.geometry.coordinates as [number, number]], {
+      ...common,
+      artifactRole: "reference-line",
+      placeIndex: candidate.index,
+      placeName: candidate.name,
+    }),
+  );
+
+  const placePoints = places.map((place) => {
+    const isCandidate = candidatePlaces.some((c) => c.index === place.index);
+    return {
+      ...place.point,
+      properties: {
+        ...(place.point.properties ?? {}),
+        ...common,
+        artifactRole: "dataset-place",
+        placeIndex: place.index,
+        placeName: place.name,
+        inRadius: isCandidate,
+      },
+    };
+  });
+
+  const centerPoint = turf.point(referencePoint, {
+    ...common,
+    artifactRole: "seeker-reference",
+    radiusMeters,
+  });
+
+  return {
+    places,
+    candidatePlaces,
+    circleInBoundary,
+    features: [centerPoint, ...boundaryFeatures, ...tentacleArms, ...placePoints] as MapFeature[],
+  };
 }
 
 export function matchingPlaceRegion(

@@ -93,7 +93,7 @@ There is deliberately no client-originated location event. Hider answer messages
 - Draft geometry is visible but never applied. Applied effects are recomputed from Game Boundary plus every enabled APPLIED question in creation order. Edit, disable, delete, or reapply invokes the same pure recomputation.
 - Geometry errors are surfaced and do not silently replace the previous authoritative Possible Area. An empty result is represented and warned about explicitly.
 
-Radar and Thermometer ship with deterministic effects. First Division Matching can use cached subdivision polygons. Tentacles, dataset Matching, and Measuring expose parameters, dataset requirements, answer choices, and visualization extension hooks without pretending uncertain rules are final.
+Radar, Thermometer, First Division Matching, dataset Matching, Measuring, and Tentacles ship with deterministic geographic effects.
 
 ## OpenStreetMap integration
 
