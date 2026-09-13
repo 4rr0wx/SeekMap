@@ -147,6 +147,15 @@ describe("processQuestionFeatures", () => {
     const bbox = turf.bbox(clipped);
     expect(bbox[0]).toBeCloseTo(5);
     expect(bbox[2]).toBeCloseTo(10); // clipped at 10, not extending to 15!
+
+    // Clipped boundary line is generated for line layers to render styled perimeters
+    const clippedLines = processed.filter(
+      (f) =>
+        (f.geometry.type === "LineString" || f.geometry.type === "MultiLineString") &&
+        f.properties?.artifactRole !== "question-scope",
+    );
+    expect(clippedLines.length).toBeGreaterThan(0);
+    expect(clippedLines[0]?.properties?.artifactRole).toBe("answer-region");
   });
 
   it("drops polygon fill entirely if the question does not overlap the search area", () => {

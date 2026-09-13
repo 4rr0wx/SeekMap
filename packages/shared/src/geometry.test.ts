@@ -79,6 +79,39 @@ describe("area geometry", () => {
     expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(false);
   });
 
+  it("builds radar artifacts with candidate-region and seeker-reference for draft, and answer-region when answered", () => {
+    const center: [number, number] = [1, 1];
+    const draft = buildQuestionArtifacts("radar.standard", { center, radiusMeters: 50_000 }, null, {
+      boundary,
+      subdivisions: null,
+      datasets: [],
+    }).artifacts.visualization;
+
+    expect(draft?.type).toBe("FeatureCollection");
+    if (draft?.type === "FeatureCollection") {
+      expect(draft.features.map((f) => f.properties?.artifactRole)).toEqual([
+        "candidate-region",
+        "seeker-reference",
+      ]);
+      expect(draft.features[0]?.geometry.type).toBe("Polygon");
+      expect(draft.features[1]?.geometry.type).toBe("Point");
+    }
+
+    const answered = buildQuestionArtifacts(
+      "radar.standard",
+      { center, radiusMeters: 50_000 },
+      "INSIDE",
+      { boundary, subdivisions: null, datasets: [] },
+    ).artifacts.visualization;
+
+    expect(answered?.type).toBe("FeatureCollection");
+    if (answered?.type === "FeatureCollection") {
+      expect(answered.features[0]?.properties?.artifactRole).toBe("answer-region");
+      expect(answered.features[0]?.properties?.answer).toBe("INSIDE");
+      expect(answered.features[1]?.properties?.artifactRole).toBe("seeker-reference");
+    }
+  });
+
   it("builds opposite Thermometer regions for hotter and colder", () => {
     const start: [number, number] = [0.25, 1];
     const end: [number, number] = [1.75, 1];

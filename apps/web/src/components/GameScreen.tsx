@@ -152,7 +152,10 @@ export function GameScreen({
   const activeQuestions = state.questions.filter((question) => question.status !== "APPLIED");
 
   useEffect(() => {
-    if (activeQuestions[0] && !selectedQuestionId) setSelectedQuestionId(activeQuestions[0].id);
+    const exists = activeQuestions.some((question) => question.id === selectedQuestionId);
+    if (!exists) {
+      setSelectedQuestionId(activeQuestions[0]?.id ?? null);
+    }
   }, [activeQuestions, selectedQuestionId]);
 
   function requestGps(questionTarget?: "A" | "B") {
@@ -453,6 +456,10 @@ export function GameScreen({
             onPickFromMap={(target) => setInteraction(target === "A" ? "question-a" : "question-b")}
             onRequestGps={requestGps}
             onPreviewChange={setDraftQuestionGeometry}
+            onSelect={setSelectedQuestionId}
+            onPointPicked={(target, point) =>
+              setDraftQuestionPoints((curr) => ({ ...curr, [target]: point }))
+            }
             onClose={() => {
               setComposer({ open: false, question: null });
               setPickedQuestionPoint(null);
