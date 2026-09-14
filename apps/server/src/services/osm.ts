@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import * as turf from "@turf/turf";
 import osmtogeojson from "osmtogeojson";
-import type { SearchAreaResult, TransitMode } from "@hideseek/shared";
+import type {
+  AreaFeature,
+  MapFeatureCollection,
+  SearchAreaResult,
+  TransitMode,
+} from "@hideseek/shared";
 import { areaFeatureSchema, normalizeArea } from "@hideseek/shared";
 import type {
   Feature,
@@ -128,10 +133,12 @@ export class OsmService {
     return candidates;
   }
 
-  private async overpass(query: string, kind: string): Promise<any> {
+  private async overpass(query: string, kind: string, cache = true): Promise<any> {
     const key = cacheKey(kind, query);
-    const cached = this.getCached<any>(key);
-    if (cached) return cached;
+    if (cache) {
+      const cached = this.getCached<any>(key);
+      if (cached) return cached;
+    }
     const response = await this.fetchJson(
       this.config.overpassUrl,
       {
@@ -141,8 +148,70 @@ export class OsmService {
       },
       30 * 1024 * 1024,
     );
-    this.setCached(key, kind, response);
+    if (cache) this.setCached(key, kind, response);
     return response;
+  }
+
+  async pointsOfInterest(
+    boundingBox: [number, number, number, number],
+    boundary: AreaFeature,
+  ): Promise<MapFeatureCollection> {
+    const [west, south, east, north] = boundingBox;
+    const bbox = `${south},${west},${north},${east}`;
+    const query = `[out:json][timeout:60];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["historic"](${bbox}););out center tags;`;
+    const response = await this.overpass(query, "game-pois", false);
+    const features: Feature<Point>[] = [];
+    const seen = new Set<string>();
+
+    for (const element of response.elements ?? []) {
+      const type = ["node", "way", "relation"].includes(element.type) ? element.type : "";
+      const id =
+        typeof element.id === "number" || typeof element.id === "string" ? String(element.id) : "";
+      const key = `${type}:${id}`;
+      const tags = element.tags ?? {};
+      const name = typeof tags.name === "string" ? tags.name.trim() : "";
+      const longitude = Number(type === "node" ? element.lon : element.center?.lon);
+      const latitude = Number(type === "node" ? element.lat : element.center?.lat);
+      if (
+        !name ||
+        !id ||
+        seen.has(key) ||
+        !Number.isFinite(longitude) ||
+        !Number.isFinite(latitude) ||
+        longitude < -180 ||
+        longitude > 180 ||
+        latitude < -90 ||
+        latitude > 90
+      ) {
+        continue;
+      }
+      const properties = Object.fromEntries(
+        Object.entries(tags)
+          .filter((entry): entry is [string, string | number | boolean] =>
+            ["string", "number", "boolean"].includes(typeof entry[1]),
+          )
+          .slice(0, 50),
+      );
+      const point = turf.point([longitude, latitude], {
+        ...properties,
+        name,
+        osmType: type,
+        osmId: id,
+      });
+      if (!turf.booleanPointInPolygon(point, boundary)) continue;
+      seen.add(key);
+      features.push(point);
+    }
+
+    if (features.length === 0) {
+      throw new Error("OpenStreetMap returned no named points of interest inside the game area");
+    }
+    if (features.length > 20_000) {
+      throw new Error(
+        "The game area contains too many OpenStreetMap POIs; use a smaller area or a curated KML/KMZ file",
+      );
+    }
+    return turf.featureCollection(features);
   }
 
   async subdivisions(

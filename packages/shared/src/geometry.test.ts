@@ -277,6 +277,7 @@ describe("area geometry", () => {
       id: "11111111-1111-4111-8111-111111111111",
       name: "Golf Courses",
       category: "MATCHING",
+      temporary: false,
       originalFilename: "golf-courses.kml",
       geojson: turf.featureCollection([
         turf.point([0.4, 1], { name: "West Golf Club" }),
@@ -350,6 +351,7 @@ describe("area geometry", () => {
       id: "22222222-2222-4222-8222-222222222222",
       name: "Theme Parks",
       category: "TENTACLES",
+      temporary: false,
       originalFilename: "parks.kml",
       geojson: turf.featureCollection([
         turf.point([0.9, 1], { name: "North Park" }),

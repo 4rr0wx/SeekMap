@@ -1196,6 +1196,34 @@ textarea:focus {
 .compact-sheet > .button {
   margin-top: 10px;
 }
+.osm-poi-prompt {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #725e2d;
+  border-radius: var(--radius-small);
+  background: #2b2516;
+}
+.osm-poi-prompt-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #f9dda0;
+}
+.osm-poi-prompt-copy svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.osm-poi-prompt-copy p {
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.osm-poi-prompt > .button {
+  margin-top: 0;
+}
 .marker-sheet {
   width: min(440px, 100%);
   display: grid;

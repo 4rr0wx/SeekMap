@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS dataset_library_content_hash ON dataset_library(conte
 CREATE TABLE IF NOT EXISTS datasets (
   id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
   source_library_id TEXT REFERENCES dataset_library(id) ON DELETE SET NULL,
+  temporary INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL, category TEXT NOT NULL, original_filename TEXT NOT NULL, geojson TEXT NOT NULL,
   feature_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -78,6 +79,9 @@ export function openDatabase(path: string) {
   const datasetColumns = sqlite.pragma("table_info(datasets)") as Array<{ name: string }>;
   if (!datasetColumns.some((column) => column.name === "source_library_id")) {
     sqlite.exec(`ALTER TABLE datasets ADD COLUMN source_library_id TEXT`);
+  }
+  if (!datasetColumns.some((column) => column.name === "temporary")) {
+    sqlite.exec(`ALTER TABLE datasets ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0`);
   }
   return { sqlite, db: drizzle(sqlite, { schema }) };
 }

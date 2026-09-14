@@ -69,6 +69,12 @@ export const joinGameSchema = z.object({
   role: playerRoleSchema,
 });
 
+export const startGameSchema = z
+  .object({
+    loadOsmPois: z.boolean().default(false),
+  })
+  .strict();
+
 export const radarParametersSchema = z.object({
   center: positionSchema,
   radiusMeters: z.number().finite().min(10).max(1_000_000),

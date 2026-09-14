@@ -13,6 +13,7 @@ import {
   datasetCategorySchema,
   joinGameSchema,
   markerInputSchema,
+  startGameSchema,
   type TransitMode,
   updateQuestionSchema,
 } from "@hideseek/shared";
@@ -212,9 +213,35 @@ export async function buildApp(
     return reply.code(201).send(identity);
   });
   app.post("/api/game/start", async (request) => {
-    store.startGame(bearer(request));
+    const input = startGameSchema.parse(request.body ?? {});
+    const token = bearer(request);
+    store.requireSeeker(token);
+    const state = store.getState(token);
+    if (state.game.phase !== "LOBBY") {
+      throw new DomainError("The game has already started", 409);
+    }
+    if (input.loadOsmPois && state.datasets.length > 0) {
+      throw new DomainError(
+        "OpenStreetMap POIs can only be loaded when the game has no datasets",
+        409,
+      );
+    }
+    const poiDataset = input.loadOsmPois
+      ? await osm.pointsOfInterest(state.game.osm.boundingBox, state.game.boundary)
+      : null;
+    store.startGame(
+      token,
+      poiDataset
+        ? {
+            name: "OpenStreetMap POIs",
+            category: "OTHER",
+            originalFilename: "openstreetmap-pois.geojson",
+            geojson: poiDataset,
+          }
+        : undefined,
+    );
     broadcast();
-    return { ok: true };
+    return { ok: true, osmPois: poiDataset?.features.length ?? 0 };
   });
   app.post("/api/game/end", async (request) => {
     store.endGame(bearer(request));

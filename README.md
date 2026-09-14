@@ -21,6 +21,7 @@ The project takes its geographic question primitives and category vocabulary fro
 - Real Voronoi-partitioned Tentacles questions with configurable radius and candidate place selection.
 - Optional Hider Question Assistance.
 - Reusable, optional KML/KMZ library copied into each selected game and converted to stored GeoJSON.
+- Optional named OpenStreetMap POI fallback when a game starts without a selected dataset; the generated dataset is removed when the game ends.
 - OSM/Overpass subdivision and train/light-rail/subway/tram layers; buses are excluded.
 - Installable PWA shell and responsive iPad/phone layouts.
 - SQLite persistence in one data directory.
@@ -82,16 +83,18 @@ Do not delete the volume during routine upgrades. `docker compose down` keeps it
 1. With no game, search an administrative area and select a Polygon/MultiPolygon result.
 2. Choose the First Division area set from the detected names, set hiding time and Hider Assistance, select or add any optional KML/KMZ datasets, and adjust transit modes or question costs as needed.
 3. Each device enters a display name and chooses Hider or Seeker. The opaque session is stored in that browser's local storage.
-4. A Seeker opens Players & Game and starts the timer.
+4. A Seeker opens Players & Game and starts the timer. If the game has no datasets, choose whether to load named POIs from OpenStreetMap or continue without them.
 5. Seekers create DRAFT questions by selecting the required reference point directly on the map (or using local GPS), then press Ask. With Assistance on, the pending question is prominent on the Hider device. With Assistance off, a Seeker records the externally obtained answer.
 6. A Seeker applies an answer to include its effect in Possible Area. Editing, disabling, deleting, or reapplying reconstructs the area from Game Boundary and every enabled APPLIED question.
 7. End Game preserves the final board. Starting a new game requires the explicit Clear Current Game action.
 
-## KML imports
+## Place datasets
 
 With no current game, the creation screen lists the persistent dataset library. KML and KMZ files can be added in one multi-file selection; every saved file is selected by default, remains optional, and can be unchecked for a game. Creating the game copies the selected normalized datasets into its authoritative state. Clearing the game removes those copies but keeps the library for the next game.
 
 During a game, Seekers can still open Data to add, replace, categorize, or remove game datasets. New in-game uploads are also added to the reusable library. The server enforces the configured byte limit, parses uploads in memory, extracts KML from KMZ archives, accepts standard Point/MultiPoint/LineString/MultiLineString/Polygon/MultiPolygon features, preserves names and safe scalar properties, and persists normalized GeoJSON. Raw uploads and filename-derived paths are never written to disk.
+
+When a Seeker starts a game with no selected dataset, the start panel offers a fallback built from named OpenStreetMap amenities, tourism features, leisure features, and historic features inside the actual game boundary. This fallback is stored in SQLite so it survives an application restart while the game is running, is never added to the reusable KML/KMZ library, and is deleted automatically on End Game. The Overpass response used to build it is not retained in the shared OSM cache.
 
 Tentacles, Matching, and Measuring can each select any imported dataset. Matching compares whether the Hider and Seeker have the same nearest in-boundary place. Measuring compares each player's distance to their own nearest in-boundary place. Tentacles finds candidate places within a radius of the reference point, partitions the area using Voronoi cells, and asks which tentacle place the Hider is closest to (or outside the radius). Point features are used directly; other feature types use a representative point on the feature, matching the game's map-icon measurement convention.
 
@@ -140,6 +143,7 @@ This is not an application authentication system. Device tokens exist only to se
 - A game currently supports one OSM administrative area; composing adjacent areas such as Lower Austria plus Vienna is future work.
 - First Division and transit completeness depends on local OpenStreetMap tagging and the selected admin level.
 - Transit loading currently uses a bounding-box Overpass query and may be expensive for very large regions.
+- The optional OSM POI fallback also uses a bounding-box Overpass query before filtering against the exact game boundary; very large areas can exceed public-service or application limits.
 - Public OSM tile/Nominatim/Overpass services should not be treated as an SLA-backed production dependency.
 - Pause, replay, statistics, QR joining, accounts, buses, automated strategy, card/curse management, and freehand GIS editing are out of scope.
 

@@ -118,6 +118,7 @@ export function GameScreen({
     MapFeatureCollection | MapFeature | null
   >(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [gameActionBusy, setGameActionBusy] = useState(false);
   const [markerDraft, setMarkerDraft] = useState<{
     point: [number, number];
     title: string;
@@ -228,14 +229,21 @@ export function GameScreen({
     }
   }
 
-  async function gameAction(path: string, method: "POST" | "DELETE" = "POST") {
+  async function gameAction(
+    path: string,
+    method: "POST" | "DELETE" = "POST",
+    body: Record<string, unknown> = {},
+  ) {
+    setGameActionBusy(true);
     try {
       if (method === "DELETE") await remove(path, token);
-      else await post(path, {}, token);
+      else await post(path, body, token);
       await refresh();
       onError(null);
     } catch (cause) {
       onError((cause as Error).message);
+    } finally {
+      setGameActionBusy(false);
     }
   }
 
@@ -535,8 +543,9 @@ export function GameScreen({
       {panel === "game" && (
         <GamePanel
           state={state}
+          busy={gameActionBusy}
           onClose={() => setPanel(null)}
-          onStart={() => void gameAction("/api/game/start")}
+          onStart={(loadOsmPois) => gameAction("/api/game/start", "POST", { loadOsmPois })}
           onEnd={() => {
             if (
               window.confirm(
@@ -798,11 +807,14 @@ function DataPanel({
           </small>
         </div>
         <div className="data-section">
-          <h3>KML/KMZ datasets</h3>
+          <h3>Place datasets</h3>
           {state.datasets.map((dataset) => (
             <div className="data-row" key={dataset.id}>
               <div>
                 <strong>{dataset.name}</strong>
+                {dataset.temporary && (
+                  <small>OpenStreetMap fallback · removed when the game ends</small>
+                )}
                 {state.me.role === "SEEKER" ? (
                   <select
                     className="inline-select"
@@ -823,17 +835,19 @@ function DataPanel({
               </div>
               {state.me.role === "SEEKER" && (
                 <div className="row-actions">
-                  <label className="text-button file-button">
-                    {replacementId === dataset.id ? "Replacing…" : "Replace"}
-                    <input
-                      type="file"
-                      accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
-                      disabled={replacementId !== null}
-                      onChange={(event) =>
-                        void replaceDataset(dataset.id, event.target.files?.[0] ?? null)
-                      }
-                    />
-                  </label>
+                  {!dataset.temporary && (
+                    <label className="text-button file-button">
+                      {replacementId === dataset.id ? "Replacing…" : "Replace"}
+                      <input
+                        type="file"
+                        accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
+                        disabled={replacementId !== null}
+                        onChange={(event) =>
+                          void replaceDataset(dataset.id, event.target.files?.[0] ?? null)
+                        }
+                      />
+                    </label>
+                  )}
                   <button
                     className="icon-button danger small"
                     onClick={() => void deleteDataset(dataset.id, dataset.name)}
@@ -919,6 +933,7 @@ function DataPanel({
 
 function GamePanel({
   state,
+  busy,
   onClose,
   onStart,
   onEnd,
@@ -926,12 +941,15 @@ function GamePanel({
   onLeaveDevice,
 }: {
   state: GameState;
+  busy: boolean;
   onClose: () => void;
-  onStart: () => void;
+  onStart: (loadOsmPois: boolean) => Promise<void>;
   onEnd: () => void;
   onReset: () => void;
   onLeaveDevice: () => void;
 }) {
+  const [showOsmPrompt, setShowOsmPrompt] = useState(false);
+
   return (
     <div className="modal-backdrop align-end">
       <section className="sheet compact-sheet">
@@ -960,29 +978,70 @@ function GamePanel({
         </div>
         {state.me.role === "SEEKER" && state.game.phase === "LOBBY" && (
           <>
-            <button className="button primary wide" onClick={onStart}>
+            <button
+              className="button primary wide"
+              disabled={busy}
+              onClick={() =>
+                state.datasets.length === 0 ? setShowOsmPrompt(true) : void onStart(false)
+              }
+            >
               <Play size={18} />
-              Start game
+              {busy ? "Starting…" : "Start game"}
             </button>
-            <button className="button danger-button wide" onClick={onReset}>
+            {showOsmPrompt && state.datasets.length === 0 && (
+              <div className="osm-poi-prompt" role="group" aria-label="OpenStreetMap POI fallback">
+                <div className="osm-poi-prompt-copy">
+                  <Database size={20} />
+                  <div>
+                    <strong>No map datasets selected</strong>
+                    <p>
+                      Load named points of interest from OpenStreetMap for this game? They are
+                      removed automatically when the game ends.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  className="button primary wide"
+                  disabled={busy}
+                  onClick={() => void onStart(true)}
+                >
+                  {busy ? "Loading OSM POIs…" : "Load OSM POIs & start"}
+                </button>
+                <button
+                  className="button secondary wide"
+                  disabled={busy}
+                  onClick={() => void onStart(false)}
+                >
+                  Start without POIs
+                </button>
+                <button
+                  className="button subtle wide"
+                  disabled={busy}
+                  onClick={() => setShowOsmPrompt(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            <button className="button danger-button wide" disabled={busy} onClick={onReset}>
               <Trash2 size={17} />
               Discard setup
             </button>
           </>
         )}
         {state.me.role === "SEEKER" && !["LOBBY", "ENDED"].includes(state.game.phase) && (
-          <button className="button danger-button wide" onClick={onEnd}>
+          <button className="button danger-button wide" disabled={busy} onClick={onEnd}>
             <Square size={17} />
             End game
           </button>
         )}
         {state.me.role === "SEEKER" && state.game.phase === "ENDED" && (
-          <button className="button danger-button wide" onClick={onReset}>
+          <button className="button danger-button wide" disabled={busy} onClick={onReset}>
             <Trash2 size={17} />
             Clear current game
           </button>
         )}
-        <button className="button subtle wide" onClick={onLeaveDevice}>
+        <button className="button subtle wide" disabled={busy} onClick={onLeaveDevice}>
           <Settings2 size={17} />
           Forget identity on this device
         </button>

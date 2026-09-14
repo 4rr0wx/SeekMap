@@ -109,6 +109,7 @@ export interface UploadedDataset {
   id: string;
   name: string;
   category: DatasetCategory;
+  temporary: boolean;
   originalFilename: string;
   geojson: MapFeatureCollection;
   featureCount: number;
