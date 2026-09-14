@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as turf from "@turf/turf";
 import { afterEach, describe, expect, it } from "vitest";
-import type { GameState } from "@hideseek/shared";
+import { combineBoundaries, type AreaFeature, type GameState } from "@hideseek/shared";
 import { buildApp, type BuiltApp } from "./app";
 import { loadConfig } from "./config";
 import { openDatabase, type DatabaseBundle } from "./db/database";
@@ -765,5 +765,97 @@ describe("server game integrity", () => {
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
     ).json<GameState>();
     expect(state.game.phase).toBe("SEEKING");
+  });
+
+  it("creates a game with a composite boundary from multiple added and subtracted locations", async () => {
+    const { app } = await fixture();
+
+    const areaA = turf.polygon([
+      [
+        [16.2, 48.1],
+        [16.4, 48.1],
+        [16.4, 48.3],
+        [16.2, 48.3],
+        [16.2, 48.1],
+      ],
+    ]) as AreaFeature;
+
+    const areaB = turf.polygon([
+      [
+        [16.35, 48.1],
+        [16.55, 48.1],
+        [16.55, 48.3],
+        [16.35, 48.3],
+        [16.35, 48.1],
+      ],
+    ]) as AreaFeature;
+
+    const excludedArea = turf.polygon([
+      [
+        [16.25, 48.15],
+        [16.35, 48.15],
+        [16.35, 48.25],
+        [16.25, 48.25],
+        [16.25, 48.15],
+      ],
+    ]) as AreaFeature;
+
+    const compositeBoundary = combineBoundaries([
+      { mode: "ADD", boundary: areaA },
+      { mode: "ADD", boundary: areaB },
+      { mode: "SUBTRACT", boundary: excludedArea },
+    ]);
+    expect(compositeBoundary).not.toBeNull();
+
+    const bbox = turf.bbox(compositeBoundary!);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/games",
+      payload: {
+        name: "Multi-Boundary Test Game",
+        hidingDurationMinutes: 45,
+        hiderAssistance: true,
+        osm: {
+          osmType: "relation",
+          osmId: "109166",
+          displayName: "Vienna (+District B, -Excluded Center)",
+          boundingBox: [bbox[0], bbox[1], bbox[2], bbox[3]],
+        },
+        boundary: compositeBoundary,
+        firstDivisionAdminLevel: null,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const joinRes = await app.inject({
+      method: "POST",
+      url: "/api/game/join",
+      payload: { displayName: "Lead Seeker", role: "SEEKER" },
+    });
+    const seekerToken = joinRes.json<{ token: string }>().token;
+
+    const stateRes = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: auth(seekerToken),
+    });
+    expect(stateRes.statusCode).toBe(200);
+    const state = stateRes.json<GameState>();
+    expect(state.game.name).toBe("Multi-Boundary Test Game");
+    expect(state.game.boundary).toEqual(compositeBoundary);
+    expect(state.game.possibleArea).toEqual(compositeBoundary);
+
+    // Point in areaA outside excluded area must be inside
+    expect(turf.booleanPointInPolygon(turf.point([16.22, 48.12]), state.game.possibleArea!)).toBe(
+      true,
+    );
+    // Point in areaB outside excluded area must be inside
+    expect(turf.booleanPointInPolygon(turf.point([16.5, 48.2]), state.game.possibleArea!)).toBe(
+      true,
+    );
+    // Point inside excluded area must NOT be inside play area
+    expect(turf.booleanPointInPolygon(turf.point([16.3, 48.2]), state.game.possibleArea!)).toBe(
+      false,
+    );
   });
 });

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   areaSquareKilometers,
   buildQuestionArtifacts,
+  combineBoundaries,
   evaluateQuestionAtPosition,
   getQuestionAnswers,
   getQuestionDefinition,
@@ -509,5 +510,516 @@ describe("area geometry", () => {
       { boundary: multi, subdivisions: null, datasets: [] },
     ).artifacts.effect!;
     expect(recomputePossibleArea(multi, [effect])?.geometry.type).toMatch(/Polygon/);
+  });
+
+  describe("combineBoundaries", () => {
+    const boxA = turf.polygon([
+      [
+        [0, 0],
+        [4, 0],
+        [4, 4],
+        [0, 4],
+        [0, 0],
+      ],
+    ]) as AreaFeature;
+
+    const boxB = turf.polygon([
+      [
+        [3, 0],
+        [6, 0],
+        [6, 4],
+        [3, 4],
+        [3, 0],
+      ],
+    ]) as AreaFeature;
+
+    const boxDisjoint = turf.polygon([
+      [
+        [10, 10],
+        [12, 10],
+        [12, 12],
+        [10, 12],
+        [10, 10],
+      ],
+    ]) as AreaFeature;
+
+    const hole = turf.polygon([
+      [
+        [1, 1],
+        [2, 1],
+        [2, 2],
+        [1, 2],
+        [1, 1],
+      ],
+    ]) as AreaFeature;
+
+    it("returns null when no operations are provided", () => {
+      expect(combineBoundaries([])).toBeNull();
+    });
+
+    it("returns null when only subtract operations are provided", () => {
+      expect(combineBoundaries([{ mode: "SUBTRACT", boundary: boxA }])).toBeNull();
+    });
+
+    it("returns the single added boundary", () => {
+      const result = combineBoundaries([{ mode: "ADD", boundary: boxA }]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("Polygon");
+      expect(areaSquareKilometers(result!)).toBeCloseTo(areaSquareKilometers(boxA), 2);
+    });
+
+    it("unions multiple overlapping added boundaries into a single boundary", () => {
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "ADD", boundary: boxB },
+      ]);
+      expect(result).not.toBeNull();
+      // Combined width is 6, height is 4 -> area should be larger than A alone but less than A + B
+      expect(areaSquareKilometers(result!)).toBeGreaterThan(areaSquareKilometers(boxA));
+      expect(areaSquareKilometers(result!)).toBeLessThan(
+        areaSquareKilometers(boxA) + areaSquareKilometers(boxB),
+      );
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([5, 2]), result!)).toBe(true);
+    });
+
+    it("unions disjoint added boundaries into a MultiPolygon", () => {
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "ADD", boundary: boxDisjoint },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("MultiPolygon");
+      expect(areaSquareKilometers(result!)).toBeCloseTo(
+        areaSquareKilometers(boxA) + areaSquareKilometers(boxDisjoint),
+        2,
+      );
+    });
+
+    it("subtracts an inner hole from an added boundary", () => {
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "SUBTRACT", boundary: hole },
+      ]);
+      expect(result).not.toBeNull();
+      expect(areaSquareKilometers(result!)).toBeCloseTo(
+        areaSquareKilometers(boxA) - areaSquareKilometers(hole),
+        2,
+      );
+      // Point inside hole must not be inside play area
+      expect(turf.booleanPointInPolygon(turf.point([1.5, 1.5]), result!)).toBe(false);
+      // Point outside hole but in boxA must still be inside
+      expect(turf.booleanPointInPolygon(turf.point([0.5, 0.5]), result!)).toBe(true);
+    });
+
+    it("subtracts multiple regions from the union of added boundaries", () => {
+      const hole2 = turf.polygon([
+        [
+          [4.5, 1],
+          [5.5, 1],
+          [5.5, 2],
+          [4.5, 2],
+          [4.5, 1],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "ADD", boundary: boxB },
+        { mode: "SUBTRACT", boundary: hole },
+        { mode: "SUBTRACT", boundary: hole2 },
+      ]);
+      expect(result).not.toBeNull();
+      expect(turf.booleanPointInPolygon(turf.point([1.5, 1.5]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([5, 1.5]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([0.5, 0.5]), result!)).toBe(true);
+    });
+
+    it("ignores subtract operations that do not intersect the added area", () => {
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "SUBTRACT", boundary: boxDisjoint },
+      ]);
+      expect(result).not.toBeNull();
+      expect(areaSquareKilometers(result!)).toBeCloseTo(areaSquareKilometers(boxA), 2);
+    });
+
+    it("returns null if subtraction completely eliminates the added area", () => {
+      const largeBox = turf.polygon([
+        [
+          [-1, -1],
+          [10, -1],
+          [10, 10],
+          [-1, 10],
+          [-1, -1],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "SUBTRACT", boundary: largeBox },
+      ]);
+      expect(result).toBeNull();
+    });
+
+    it("handles MultiPolygon with multiple outer rings and multiple inner holes", () => {
+      const multiWithHoles = turf.multiPolygon([
+        [
+          [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+            [0, 0],
+          ],
+          [
+            [2, 2],
+            [4, 2],
+            [4, 4],
+            [2, 4],
+            [2, 2],
+          ],
+          [
+            [6, 6],
+            [8, 6],
+            [8, 8],
+            [6, 8],
+            [6, 6],
+          ],
+        ],
+        [
+          [
+            [20, 20],
+            [30, 20],
+            [30, 30],
+            [20, 30],
+            [20, 20],
+          ],
+          [
+            [22, 22],
+            [25, 22],
+            [25, 25],
+            [22, 25],
+            [22, 22],
+          ],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([{ mode: "ADD", boundary: multiWithHoles }]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("MultiPolygon");
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([3, 3]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([7, 7]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([21, 21]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([23, 23]), result!)).toBe(false);
+    });
+
+    it("subtracts a boundary that bridges across distinct components of a MultiPolygon", () => {
+      const multi = turf.multiPolygon([
+        [
+          [
+            [0, 0],
+            [5, 0],
+            [5, 5],
+            [0, 5],
+            [0, 0],
+          ],
+        ],
+        [
+          [
+            [10, 0],
+            [15, 0],
+            [15, 5],
+            [10, 5],
+            [10, 0],
+          ],
+        ],
+      ]) as AreaFeature;
+
+      const cutter = turf.polygon([
+        [
+          [4, 2],
+          [11, 2],
+          [11, 4],
+          [4, 4],
+          [4, 2],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: multi },
+        { mode: "SUBTRACT", boundary: cutter },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("MultiPolygon");
+      expect(turf.booleanPointInPolygon(turf.point([4.5, 3]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([10.5, 3]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([14, 1]), result!)).toBe(true);
+    });
+
+    it("subtracts a MultiPolygon boundary with multiple components", () => {
+      const multiSubtract = turf.multiPolygon([
+        [
+          [
+            [0.5, 0.5],
+            [1.5, 0.5],
+            [1.5, 1.5],
+            [0.5, 1.5],
+            [0.5, 0.5],
+          ],
+        ],
+        [
+          [
+            [2.5, 2.5],
+            [3.5, 2.5],
+            [3.5, 3.5],
+            [2.5, 3.5],
+            [2.5, 2.5],
+          ],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "SUBTRACT", boundary: multiSubtract },
+      ]);
+      expect(result).not.toBeNull();
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([3, 3]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([2, 1]), result!)).toBe(true);
+    });
+
+    it("merges two adjacent polygons sharing an identical edge into a single Polygon", () => {
+      const poly1 = turf.polygon([
+        [
+          [0, 0],
+          [2, 0],
+          [2, 2],
+          [0, 2],
+          [0, 0],
+        ],
+      ]) as AreaFeature;
+      const poly2 = turf.polygon([
+        [
+          [2, 0],
+          [4, 0],
+          [4, 2],
+          [2, 2],
+          [2, 0],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: poly1 },
+        { mode: "ADD", boundary: poly2 },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("Polygon");
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([3, 1]), result!)).toBe(true);
+      expect(areaSquareKilometers(result!)).toBeCloseTo(
+        areaSquareKilometers(poly1) + areaSquareKilometers(poly2),
+        3,
+      );
+    });
+
+    it("merges two adjacent polygons sharing a partial edge (T-junction)", () => {
+      const poly1 = turf.polygon([
+        [
+          [0, 0],
+          [2, 0],
+          [2, 4],
+          [0, 4],
+          [0, 0],
+        ],
+      ]) as AreaFeature;
+      const poly2 = turf.polygon([
+        [
+          [2, 1],
+          [4, 1],
+          [4, 3],
+          [2, 3],
+          [2, 1],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: poly1 },
+        { mode: "ADD", boundary: poly2 },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("Polygon");
+      expect(areaSquareKilometers(result!)).toBeCloseTo(
+        areaSquareKilometers(poly1) + areaSquareKilometers(poly2),
+        3,
+      );
+    });
+
+    it("unions polygons touching at a single vertex into a MultiPolygon to prevent pinch points", () => {
+      const poly1 = turf.polygon([
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+          [0, 0],
+        ],
+      ]) as AreaFeature;
+      const poly2 = turf.polygon([
+        [
+          [1, 1],
+          [2, 1],
+          [2, 2],
+          [1, 2],
+          [1, 1],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: poly1 },
+        { mode: "ADD", boundary: poly2 },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("MultiPolygon");
+      expect(turf.booleanPointInPolygon(turf.point([0.5, 0.5]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([1.5, 1.5]), result!)).toBe(true);
+    });
+
+    it("splits a single polygon into a MultiPolygon via a trench cut subtraction", () => {
+      const trench = turf.polygon([
+        [
+          [1.8, -1],
+          [2.2, -1],
+          [2.2, 5],
+          [1.8, 5],
+          [1.8, -1],
+        ],
+      ]) as AreaFeature;
+
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: boxA },
+        { mode: "SUBTRACT", boundary: trench },
+      ]);
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toBe("MultiPolygon");
+      expect(turf.booleanPointInPolygon(turf.point([1, 2]), result!)).toBe(true);
+      expect(turf.booleanPointInPolygon(turf.point([2, 2]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([3, 2]), result!)).toBe(true);
+    });
+
+    it("handles order independence and precedence of subtractions over additions", () => {
+      const A = turf.polygon([
+        [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10],
+          [0, 0],
+        ],
+      ]) as AreaFeature;
+      const holeArea = turf.polygon([
+        [
+          [3, 3],
+          [7, 3],
+          [7, 7],
+          [3, 7],
+          [3, 3],
+        ],
+      ]) as AreaFeature;
+      const island = turf.polygon([
+        [
+          [4, 4],
+          [6, 4],
+          [6, 6],
+          [4, 6],
+          [4, 4],
+        ],
+      ]) as AreaFeature;
+
+      // Grouped model: ALL additions unioned, then ALL subtractions applied.
+      // Island inside hole is subsumed by A in union, then hole is subtracted, so island is excluded.
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: A },
+        { mode: "SUBTRACT", boundary: holeArea },
+        { mode: "ADD", boundary: island },
+      ]);
+      expect(result).not.toBeNull();
+      expect(turf.booleanPointInPolygon(turf.point([5, 5]), result!)).toBe(false);
+      expect(turf.booleanPointInPolygon(turf.point([1, 1]), result!)).toBe(true);
+
+      // Order independence between ADD and SUBTRACT
+      const reordered = combineBoundaries([
+        { mode: "SUBTRACT", boundary: holeArea },
+        { mode: "ADD", boundary: island },
+        { mode: "ADD", boundary: A },
+      ]);
+      expect(reordered).not.toBeNull();
+      expect(areaSquareKilometers(reordered!)).toBeCloseTo(areaSquareKilometers(result!), 4);
+    });
+
+    it("handles high vertex count complex polygon with 2,000 vertices", () => {
+      const n = 2000;
+      const center: [number, number] = [16.37, 48.2];
+      const coords: [number, number][] = [];
+      for (let i = 0; i < n; i++) {
+        const theta = (i / n) * 2 * Math.PI;
+        const r = 0.1 + 0.02 * Math.sin(theta * 25);
+        coords.push([center[0] + r * Math.cos(theta), center[1] + r * Math.sin(theta)]);
+      }
+      coords.push(coords[0]!);
+
+      const wavyPoly = turf.polygon([coords]) as AreaFeature;
+      const cutter = turf.polygon([
+        [
+          [16.35, 48.15],
+          [16.45, 48.15],
+          [16.45, 48.25],
+          [16.35, 48.25],
+          [16.35, 48.15],
+        ],
+      ]) as AreaFeature;
+
+      const t0 = performance.now();
+      const result = combineBoundaries([
+        { mode: "ADD", boundary: wavyPoly },
+        { mode: "SUBTRACT", boundary: cutter },
+      ]);
+      const duration = performance.now() - t0;
+
+      expect(result).not.toBeNull();
+      expect(result?.geometry.type).toMatch(/Polygon/);
+      expect(duration).toBeLessThan(1000);
+    });
+
+    it("safely rejects non-polygon or degenerate geometry without throwing", () => {
+      const pointFeature = turf.point([0, 0]) as unknown as AreaFeature;
+      expect(combineBoundaries([{ mode: "ADD", boundary: pointFeature }])).toBeNull();
+
+      const lineFeature = turf.lineString([
+        [0, 0],
+        [1, 1],
+      ]) as unknown as AreaFeature;
+      expect(combineBoundaries([{ mode: "ADD", boundary: lineFeature }])).toBeNull();
+
+      const emptyCoords = {
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [] },
+        properties: {},
+      } as unknown as AreaFeature;
+      expect(combineBoundaries([{ mode: "ADD", boundary: emptyCoords }])).toBeNull();
+
+      const bowtie = turf.polygon([
+        [
+          [0, 0],
+          [2, 2],
+          [2, 0],
+          [0, 2],
+          [0, 0],
+        ],
+      ]) as AreaFeature;
+      expect(() => combineBoundaries([{ mode: "ADD", boundary: bowtie }])).not.toThrow();
+    });
   });
 });

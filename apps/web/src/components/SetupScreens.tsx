@@ -1,7 +1,19 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
-import { Compass, MapPinned, Search, Trash2, Upload, Users } from "lucide-react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  AlertTriangle,
+  Compass,
+  MapPinned,
+  Minus,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  Users,
+} from "lucide-react";
+import * as turf from "@turf/turf";
 import {
   QUESTION_DEFINITIONS,
+  combineBoundaries,
   type PlayerRole,
   type PublicConfig,
   type ReusableDataset,
@@ -20,6 +32,12 @@ import {
 } from "../api";
 import type { GameSummary } from "../useGameSession";
 import { AreaPreview } from "./AreaPreview";
+
+export interface SelectedBoundary {
+  id: string;
+  result: SearchAreaResult;
+  mode: "ADD" | "SUBTRACT";
+}
 
 function describeSubdivision(level: SubdivisionLevel): string {
   if (level.examples.length === 0) {
@@ -48,7 +66,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
   const [assistance, setAssistance] = useState(true);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchAreaResult[]>([]);
-  const [selected, setSelected] = useState<SearchAreaResult | null>(null);
+  const [boundaries, setBoundaries] = useState<SelectedBoundary[]>([]);
   const [divisionLevel, setDivisionLevel] = useState<number | "">("");
   const [divisionCandidates, setDivisionCandidates] = useState<SubdivisionLevel[]>([]);
   const [divisionStatus, setDivisionStatus] = useState("Choose an area to load its subdivisions.");
@@ -139,14 +157,77 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     }
   }
 
-  async function choose(result: SearchAreaResult) {
-    setSelected(result);
+  const primaryLocation = boundaries.find((b) => b.mode === "ADD")?.result ?? null;
+
+  const combinedBoundary = useMemo(() => {
+    if (boundaries.length === 0) return null;
+    return combineBoundaries(
+      boundaries.map((b) => ({ mode: b.mode, boundary: b.result.boundary })),
+    );
+  }, [boundaries]);
+
+  const excludedBoundaries = useMemo(() => {
+    return boundaries.filter((b) => b.mode === "SUBTRACT").map((b) => b.result.boundary);
+  }, [boundaries]);
+
+  const combinedDisplayName = useMemo(() => {
+    const added = boundaries.filter((b) => b.mode === "ADD");
+    const subtracted = boundaries.filter((b) => b.mode === "SUBTRACT");
+    if (added.length === 0) return "";
+    const addNames = added.map((b) => b.result.osm.displayName);
+    const subNames = subtracted.map((b) => b.result.osm.displayName);
+    if (subNames.length === 0) {
+      return addNames.join(" + ").slice(0, 500);
+    }
+    return `${addNames.join(" + ")} (excl. ${subNames.join(", ")})`.slice(0, 500);
+  }, [boundaries]);
+
+  useEffect(() => {
+    if (!primaryLocation) {
+      setDivisionLevel("");
+      setDivisionCandidates([]);
+      setDivisionStatus("Choose an included area to load its subdivisions.");
+      setDivisionFailed(false);
+      return;
+    }
+
+    let active = true;
+    setDivisionLevel("");
+    setDivisionCandidates([]);
+    setDivisionFailed(false);
+    setDivisionStatus("Loading subdivision names…");
+
+    void discoverSubdivisionLevels(primaryLocation)
+      .then((response) => {
+        if (!active) return;
+        setDivisionCandidates(response.levels);
+        if (response.levels[0]) {
+          setDivisionLevel(response.levels[0].adminLevel);
+          setDivisionStatus(describeSubdivision(response.levels[0]));
+        } else {
+          setDivisionStatus("No child areas found. Disable First Division or choose another area.");
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setDivisionLevel("");
+        setDivisionFailed(true);
+        setDivisionStatus("Could not load child areas.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [primaryLocation?.osm.osmType, primaryLocation?.osm.osmId]);
+
+  async function retrySubdivisionLookup() {
+    if (!primaryLocation) return;
     setDivisionLevel("");
     setDivisionCandidates([]);
     setDivisionFailed(false);
     setDivisionStatus("Loading subdivision names…");
     try {
-      const response = await discoverSubdivisionLevels(result);
+      const response = await discoverSubdivisionLevels(primaryLocation);
       setDivisionCandidates(response.levels);
       if (response.levels[0]) {
         setDivisionLevel(response.levels[0].adminLevel);
@@ -161,17 +242,54 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     }
   }
 
+  function addBoundary(result: SearchAreaResult, mode: "ADD" | "SUBTRACT") {
+    const id = `${result.osm.osmType}-${result.osm.osmId}`;
+    setBoundaries((current) => {
+      const existingIndex = current.findIndex((b) => b.id === id);
+      if (existingIndex >= 0) {
+        const existing = current[existingIndex];
+        if (existing && existing.mode !== mode) {
+          return current.map((b, i) => (i === existingIndex ? { ...b, mode } : b));
+        }
+        return current;
+      }
+      return [...current, { id, result, mode }];
+    });
+  }
+
+  function toggleBoundaryMode(id: string) {
+    setBoundaries((current) =>
+      current.map((b) => (b.id === id ? { ...b, mode: b.mode === "ADD" ? "SUBTRACT" : "ADD" } : b)),
+    );
+  }
+
+  function removeBoundary(id: string) {
+    setBoundaries((current) => current.filter((b) => b.id !== id));
+  }
+
+  function clearAllBoundaries() {
+    setBoundaries([]);
+  }
+
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!selected) return onError("Select a game area first.");
+    if (!primaryLocation || !combinedBoundary) {
+      return onError("Include at least one valid location to create the play area.");
+    }
     setBusy(true);
     try {
+      const bbox = turf.bbox(combinedBoundary);
       await post("/api/games", {
         name,
         hidingDurationMinutes: hidingMinutes,
         hiderAssistance: assistance,
-        osm: selected.osm,
-        boundary: selected.boundary,
+        osm: {
+          osmType: primaryLocation.osm.osmType,
+          osmId: primaryLocation.osm.osmId,
+          displayName: combinedDisplayName || primaryLocation.osm.displayName,
+          boundingBox: [bbox[0], bbox[1], bbox[2], bbox[3]],
+        },
+        boundary: combinedBoundary,
         firstDivisionAdminLevel: divisionLevel === "" ? null : divisionLevel,
         transitModes,
         questionConfigs,
@@ -224,20 +342,151 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
         </form>
         {results.length > 0 && (
           <div className="result-list" aria-label="Area results">
-            {results.map((result) => (
-              <button
-                key={`${result.osm.osmType}-${result.osm.osmId}`}
-                type="button"
-                className={selected?.osm.osmId === result.osm.osmId ? "result selected" : "result"}
-                onClick={() => void choose(result)}
-              >
-                <strong>{result.osm.displayName}</strong>
-                <span>Administrative boundary</span>
-              </button>
-            ))}
+            {results.map((result) => {
+              const id = `${result.osm.osmType}-${result.osm.osmId}`;
+              const existing = boundaries.find((b) => b.id === id);
+              return (
+                <div
+                  key={id}
+                  className={existing ? `result selected ${existing.mode.toLowerCase()}` : "result"}
+                >
+                  <div className="result-text">
+                    <strong>{result.osm.displayName}</strong>
+                    <span>Administrative boundary</span>
+                  </div>
+                  <div className="result-actions">
+                    {existing ? (
+                      <>
+                        <span className={`boundary-tag ${existing.mode.toLowerCase()}`}>
+                          {existing.mode === "ADD" ? "+ Included" : "− Excluded"}
+                        </span>
+                        <button
+                          type="button"
+                          className="button subtle small"
+                          aria-label={
+                            existing.mode === "ADD"
+                              ? `Switch ${result.osm.displayName} to excluded`
+                              : `Switch ${result.osm.displayName} to included`
+                          }
+                          onClick={() => toggleBoundaryMode(id)}
+                        >
+                          {existing.mode === "ADD" ? "Exclude" : "Include"}
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label={`Remove ${result.osm.displayName}`}
+                          onClick={() => removeBoundary(id)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="button secondary small"
+                          aria-label={`Include ${result.osm.displayName}`}
+                          onClick={() => addBoundary(result, "ADD")}
+                        >
+                          <Plus size={15} />
+                          Include
+                        </button>
+                        <button
+                          type="button"
+                          className="button secondary small"
+                          aria-label={`Exclude ${result.osm.displayName}`}
+                          onClick={() => addBoundary(result, "SUBTRACT")}
+                        >
+                          <Minus size={15} />
+                          Exclude
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
-        {selected && <AreaPreview area={selected} config={config} />}
+
+        {boundaries.length > 0 && (
+          <div className="selected-boundaries">
+            <div className="selected-boundaries-header">
+              <div>
+                <h3>Play area boundaries ({boundaries.length})</h3>
+                <p className="field-help">
+                  Include or exclude administrative areas to shape your play area.
+                </p>
+              </div>
+              <button type="button" className="button subtle small" onClick={clearAllBoundaries}>
+                Clear all
+              </button>
+            </div>
+            <div className="boundary-list">
+              {boundaries.map((b) => (
+                <div className={`boundary-item ${b.mode.toLowerCase()}`} key={b.id}>
+                  <div className="boundary-item-info">
+                    <span className={`boundary-tag ${b.mode.toLowerCase()}`}>
+                      {b.mode === "ADD" ? "+ Included" : "− Excluded"}
+                    </span>
+                    <strong>{b.result.osm.displayName}</strong>
+                  </div>
+                  <div className="boundary-item-actions">
+                    <button
+                      type="button"
+                      className="button subtle small"
+                      aria-label={
+                        b.mode === "ADD"
+                          ? `Switch ${b.result.osm.displayName} to excluded`
+                          : `Switch ${b.result.osm.displayName} to included`
+                      }
+                      onClick={() => toggleBoundaryMode(b.id)}
+                    >
+                      {b.mode === "ADD" ? "Exclude" : "Include"}
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Remove ${b.result.osm.displayName} from boundaries`}
+                      onClick={() => removeBoundary(b.id)}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {boundaries.length > 0 && !primaryLocation && (
+          <div className="boundary-warning">
+            <AlertTriangle size={18} />
+            <span>At least one location boundary must be included to define the play area.</span>
+          </div>
+        )}
+
+        {boundaries.length > 0 && primaryLocation && !combinedBoundary && (
+          <div className="boundary-warning">
+            <AlertTriangle size={18} />
+            <span>
+              The excluded boundaries completely eliminate the play area. Please adjust your
+              boundaries.
+            </span>
+          </div>
+        )}
+
+        {combinedBoundary && primaryLocation && (
+          <AreaPreview
+            area={{
+              boundary: combinedBoundary,
+              osm: { displayName: combinedDisplayName || primaryLocation.osm.displayName },
+            }}
+            config={config}
+            excludedBoundaries={excludedBoundaries}
+          />
+        )}
         <form className="form-stack game-details" onSubmit={create}>
           <label>
             Game name
@@ -284,7 +533,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
                 Areas used by First Division
                 <input
                   type="text"
-                  value={selected ? divisionStatus : "Choose an area first"}
+                  value={primaryLocation ? divisionStatus : "Choose an area first"}
                   disabled
                   readOnly
                 />
@@ -292,11 +541,11 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
             )}
           </div>
           {divisionCandidates.length > 0 && <p className="field-help">{divisionStatus}</p>}
-          {divisionFailed && selected && (
+          {divisionFailed && primaryLocation && (
             <button
               type="button"
               className="button subtle retry-button"
-              onClick={() => void choose(selected)}
+              onClick={() => void retrySubdivisionLookup()}
             >
               Retry subdivision lookup
             </button>
@@ -455,7 +704,8 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
           <button
             className="button primary"
             disabled={
-              !selected ||
+              !combinedBoundary ||
+              !primaryLocation ||
               busy ||
               transitModes.length === 0 ||
               (firstDivisionEnabled && divisionLevel === "")
