@@ -41,4 +41,30 @@ describe("API request headers", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.cache).toBe("no-store");
   });
+
+  it("fetches current game summary including seekerOnly flag", async () => {
+    const summaryPayload = {
+      hasGame: true,
+      game: {
+        id: "game-1",
+        name: "Test Game",
+        phase: "LOBBY",
+        lifecycle: "ACTIVE",
+        hiderAssistance: false,
+        seekerOnly: true,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(summaryPayload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { currentGame } = await import("./api");
+    const res = await currentGame();
+
+    expect(res).toEqual(summaryPayload);
+  });
 });

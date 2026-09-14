@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateQuestionCost, deriveTimer, formatDuration } from "./index";
+import { calculateQuestionCost, createGameSchema, deriveTimer, formatDuration } from "./index";
 
 describe("question costs", () => {
   it("tracks linear repeat cost by stable usage number", () => {
@@ -29,5 +29,46 @@ describe("server-derived timers", () => {
   it("formats short and long durations", () => {
     expect(formatDuration(61)).toBe("01:01");
     expect(formatDuration(3661)).toBe("01:01:01");
+  });
+});
+
+describe("createGameSchema", () => {
+  const basePayload = {
+    name: "Test Game",
+    hidingDurationMinutes: 30,
+    hiderAssistance: true,
+    osm: {
+      osmType: "relation" as const,
+      osmId: "123",
+      displayName: "City",
+      boundingBox: [0, 0, 1, 1] as [number, number, number, number],
+    },
+    boundary: {
+      type: "Feature" as const,
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+            [0, 0],
+          ],
+        ],
+      },
+      properties: {},
+    },
+    firstDivisionAdminLevel: null,
+  };
+
+  it("defaults seekerOnly to false", () => {
+    const parsed = createGameSchema.parse(basePayload);
+    expect(parsed.seekerOnly).toBe(false);
+  });
+
+  it("accepts seekerOnly: true", () => {
+    const parsed = createGameSchema.parse({ ...basePayload, seekerOnly: true });
+    expect(parsed.seekerOnly).toBe(true);
   });
 });

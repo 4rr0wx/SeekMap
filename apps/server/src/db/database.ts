@@ -10,7 +10,7 @@ PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS games (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, lifecycle TEXT NOT NULL, phase TEXT NOT NULL,
   hiding_duration_seconds INTEGER NOT NULL, phase_started_at TEXT, paused_at TEXT, ended_at TEXT,
-  hider_assistance INTEGER NOT NULL, osm_type TEXT NOT NULL, osm_id TEXT NOT NULL,
+  hider_assistance INTEGER NOT NULL, seeker_only INTEGER NOT NULL DEFAULT 0, osm_type TEXT NOT NULL, osm_id TEXT NOT NULL,
   osm_display_name TEXT NOT NULL, osm_bounding_box_json TEXT NOT NULL, boundary_geojson TEXT NOT NULL,
   possible_area_geojson TEXT, first_division_admin_level INTEGER, subdivisions_geojson TEXT,
   transit_lines_geojson TEXT, transit_stations_geojson TEXT,
@@ -71,6 +71,9 @@ export function openDatabase(path: string) {
     sqlite.exec(
       `ALTER TABLE games ADD COLUMN transit_modes_json TEXT NOT NULL DEFAULT '["train","light_rail","subway","tram"]'`,
     );
+  }
+  if (!gameColumns.some((column) => column.name === "seeker_only")) {
+    sqlite.exec(`ALTER TABLE games ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`);
   }
   const datasetColumns = sqlite.pragma("table_info(datasets)") as Array<{ name: string }>;
   if (!datasetColumns.some((column) => column.name === "source_library_id")) {

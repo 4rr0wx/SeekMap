@@ -46,6 +46,7 @@ export const createGameSchema = z.object({
     .min(1)
     .max(24 * 60),
   hiderAssistance: z.boolean(),
+  seekerOnly: z.boolean().default(false),
   osm: z.object({
     osmType: z.enum(["relation", "way"]),
     osmId: z.string().min(1).max(40),

@@ -270,7 +270,13 @@ export function GameScreen({
     <main className="game-shell">
       <header className="game-header">
         <div className="game-title">
-          <p className="eyebrow">{state.me.role === "SEEKER" ? "Seeker board" : "Hider board"}</p>
+          <p className="eyebrow">
+            {state.game.seekerOnly
+              ? "Seeker-only board"
+              : state.me.role === "SEEKER"
+                ? "Seeker board"
+                : "Hider board"}
+          </p>
           <h1>{state.game.name}</h1>
         </div>
         <div className="timer" aria-label={`${timer.label} ${timer.value}`}>
@@ -931,7 +937,9 @@ function GamePanel({
       <section className="sheet compact-sheet">
         <div className="sheet-header">
           <div>
-            <p className="eyebrow">{state.game.phase}</p>
+            <p className="eyebrow">
+              {state.game.seekerOnly ? `Seeker-only · ${state.game.phase}` : state.game.phase}
+            </p>
             <h2>Players & game</h2>
           </div>
           <button className="icon-button" onClick={onClose}>

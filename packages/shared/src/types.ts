@@ -51,6 +51,7 @@ export interface GameConfig {
   pausedAt: string | null;
   endedAt: string | null;
   hiderAssistance: boolean;
+  seekerOnly: boolean;
   osm: OSMSelection;
   boundary: AreaFeature;
   possibleArea: AreaFeature | null;
