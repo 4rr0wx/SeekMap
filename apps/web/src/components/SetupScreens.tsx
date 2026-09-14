@@ -64,6 +64,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
   const [name, setName] = useState("HideSeek Atlas");
   const [hidingMinutes, setHidingMinutes] = useState(30);
   const [assistance, setAssistance] = useState(true);
+  const [seekerOnly, setSeekerOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchAreaResult[]>([]);
   const [boundaries, setBoundaries] = useState<SelectedBoundary[]>([]);
@@ -282,7 +283,8 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
       await post("/api/games", {
         name,
         hidingDurationMinutes: hidingMinutes,
-        hiderAssistance: assistance,
+        hiderAssistance: seekerOnly ? false : assistance,
+        seekerOnly,
         osm: {
           osmType: primaryLocation.osm.osmType,
           osmId: primaryLocation.osm.osmId,
@@ -553,14 +555,29 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
           <label className="switch-row">
             <input
               type="checkbox"
-              checked={assistance}
-              onChange={(event) => setAssistance(event.target.checked)}
+              checked={seekerOnly}
+              onChange={(event) => setSeekerOnly(event.target.checked)}
             />
             <span>
-              <strong>Hider Question Assistance</strong>
-              <small>Pending questions appear on the Hider device.</small>
+              <strong>Seeker-only mode</strong>
+              <small>
+                Only Seekers join the app. Communication with the Hider happens externally.
+              </small>
             </span>
           </label>
+          {!seekerOnly && (
+            <label className="switch-row">
+              <input
+                type="checkbox"
+                checked={assistance}
+                onChange={(event) => setAssistance(event.target.checked)}
+              />
+              <span>
+                <strong>Hider Question Assistance</strong>
+                <small>Pending questions appear on the Hider device.</small>
+              </span>
+            </label>
+          )}
           <details className="question-config dataset-library" open>
             <summary>Map datasets</summary>
             <p className="field-help">
@@ -726,15 +743,25 @@ interface JoinProps {
 }
 
 export function JoinGameScreen({ summary, onJoined, onError }: JoinProps) {
+  const isSeekerOnly = Boolean(summary.game?.seekerOnly);
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<PlayerRole>("SEEKER");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (isSeekerOnly) {
+      setRole("SEEKER");
+    }
+  }, [isSeekerOnly]);
 
   async function join(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const identity = await post<Identity>("/api/game/join", { displayName, role });
+      const identity = await post<Identity>("/api/game/join", {
+        displayName,
+        role: isSeekerOnly ? "SEEKER" : role,
+      });
       onJoined(identity);
       onError(null);
     } catch (cause) {
@@ -767,22 +794,34 @@ export function JoinGameScreen({ summary, onJoined, onError }: JoinProps) {
               required
             />
           </label>
+          {isSeekerOnly && (
+            <p className="field-help">
+              This game is in Seeker-only mode. All players join as Seekers; communication with the
+              Hider is handled externally.
+            </p>
+          )}
           <div className="role-grid">
-            {(["SEEKER", "HIDER"] as const).map((value) => (
-              <button
-                type="button"
-                key={value}
-                className={role === value ? "role selected" : "role"}
-                onClick={() => setRole(value)}
-              >
-                <strong>{value === "SEEKER" ? "Seeker" : "Hider"}</strong>
-                <span>
-                  {value === "SEEKER"
-                    ? "Questions, tools and team notes"
-                    : "Shared evidence and answer controls"}
-                </span>
-              </button>
-            ))}
+            {(["SEEKER", "HIDER"] as const).map((value) => {
+              const isDisabled = isSeekerOnly && value === "HIDER";
+              return (
+                <button
+                  type="button"
+                  key={value}
+                  disabled={isDisabled}
+                  className={role === value ? "role selected" : "role"}
+                  onClick={() => !isDisabled && setRole(value)}
+                >
+                  <strong>{value === "SEEKER" ? "Seeker" : "Hider"}</strong>
+                  <span>
+                    {isDisabled
+                      ? "Disabled in Seeker-only mode (external communication)"
+                      : value === "SEEKER"
+                        ? "Questions, tools and team notes"
+                        : "Shared evidence and answer controls"}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           <button className="button primary" disabled={busy}>
             {busy ? "Joining…" : "Join game"}

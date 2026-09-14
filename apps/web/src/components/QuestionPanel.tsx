@@ -491,8 +491,10 @@ export function QuestionActivitySidebar({
             : null;
           const canAnswer =
             question.status === "PENDING" &&
-            ((state.game.hiderAssistance && state.me.role === "HIDER") ||
-              (!state.game.hiderAssistance && state.me.role === "SEEKER"));
+            (state.game.seekerOnly
+              ? state.me.role === "SEEKER"
+              : (state.game.hiderAssistance && state.me.role === "HIDER") ||
+                (!state.game.hiderAssistance && state.me.role === "SEEKER"));
           const questionContext = {
             boundary: state.game.boundary,
             subdivisions: state.game.subdivisions,
@@ -600,6 +602,9 @@ export function QuestionActivitySidebar({
               )}
               {question.status === "PENDING" && !canAnswer && (
                 <p className="waiting-copy">Waiting for the Hider's answer.</p>
+              )}
+              {question.status === "PENDING" && canAnswer && state.game.seekerOnly && (
+                <p className="waiting-copy">Record the Hider's response received externally:</p>
               )}
               <div className="card-actions" onClick={(event) => event.stopPropagation()}>
                 {state.me.role === "SEEKER" && question.status === "DRAFT" && (
@@ -720,8 +725,10 @@ export function QuestionHistory({
 
   const canAnswer = (question: QuestionInstance) =>
     question.status === "PENDING" &&
-    ((state.game.hiderAssistance && state.me.role === "HIDER") ||
-      (!state.game.hiderAssistance && state.me.role === "SEEKER"));
+    (state.game.seekerOnly
+      ? state.me.role === "SEEKER"
+      : (state.game.hiderAssistance && state.me.role === "HIDER") ||
+        (!state.game.hiderAssistance && state.me.role === "SEEKER"));
 
   return (
     <div className="modal-backdrop align-end" role="presentation">

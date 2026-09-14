@@ -43,6 +43,7 @@ export const currentGame = (token?: string) =>
           phase: string;
           lifecycle: string;
           hiderAssistance: boolean;
+          seekerOnly: boolean;
         };
       }
   >("/api/game/current", {}, token);

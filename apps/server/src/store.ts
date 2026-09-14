@@ -165,6 +165,7 @@ export class GameStore {
             lifecycle: game.lifecycle,
             phase: game.phase,
             hiderAssistance: game.hiderAssistance,
+            seekerOnly: Boolean(game.seekerOnly),
           },
         }
       : { hasGame: false as const, game: null };
@@ -174,6 +175,7 @@ export class GameStore {
     name: string;
     hidingDurationMinutes: number;
     hiderAssistance: boolean;
+    seekerOnly?: boolean | undefined;
     osm: {
       osmType: "relation" | "way";
       osmId: string;
@@ -202,7 +204,8 @@ export class GameStore {
           phaseStartedAt: null,
           pausedAt: null,
           endedAt: null,
-          hiderAssistance: input.hiderAssistance,
+          hiderAssistance: input.seekerOnly ? false : input.hiderAssistance,
+          seekerOnly: input.seekerOnly ?? false,
           osmType: input.osm.osmType,
           osmId: input.osm.osmId,
           osmDisplayName: input.osm.displayName,
@@ -267,6 +270,8 @@ export class GameStore {
     const game = this.currentRow();
     if (!game || game.lifecycle !== "ACTIVE")
       throw new DomainError("There is no active game to join", 409);
+    if (game.seekerOnly && role === "HIDER")
+      throw new DomainError("This game is in Seeker-only mode", 400);
     const token = randomBytes(32).toString("base64url");
     const id = randomUUID();
     const timestamp = now();
@@ -319,6 +324,7 @@ export class GameStore {
       pausedAt: row.pausedAt,
       endedAt: row.endedAt,
       hiderAssistance: row.hiderAssistance,
+      seekerOnly: Boolean(row.seekerOnly),
       osm: {
         osmType: row.osmType as "relation" | "way",
         osmId: row.osmId,
@@ -725,7 +731,11 @@ export class GameStore {
     if (!game || !row) throw new DomainError("Question not found", 404);
     if (row.status !== "PENDING")
       throw new DomainError("Only a pending question can be answered", 409);
-    if (game.hiderAssistance ? player.role !== "HIDER" : player.role !== "SEEKER") {
+    if (game.seekerOnly) {
+      if (player.role !== "SEEKER") {
+        throw new DomainError("Only a Seeker can record answers in Seeker-only mode", 403);
+      }
+    } else if (game.hiderAssistance ? player.role !== "HIDER" : player.role !== "SEEKER") {
       throw new DomainError(
         game.hiderAssistance ? "The Hider answers this question" : "A Seeker records this answer",
         403,

@@ -10,6 +10,7 @@ export const games = sqliteTable("games", {
   pausedAt: text("paused_at"),
   endedAt: text("ended_at"),
   hiderAssistance: integer("hider_assistance", { mode: "boolean" }).notNull(),
+  seekerOnly: integer("seeker_only", { mode: "boolean" }).notNull().default(false),
   osmType: text("osm_type").notNull(),
   osmId: text("osm_id").notNull(),
   osmDisplayName: text("osm_display_name").notNull(),

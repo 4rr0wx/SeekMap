@@ -858,4 +858,130 @@ describe("server game integrity", () => {
       false,
     );
   });
+
+  it("supports Seeker-only mode, rejecting Hider joins and allowing Seeker to record answers", async () => {
+    const { app } = await fixture();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/games",
+      payload: {
+        name: "Seeker-only Adventure",
+        hidingDurationMinutes: 15,
+        hiderAssistance: false,
+        seekerOnly: true,
+        osm: {
+          osmType: "relation",
+          osmId: "109166",
+          displayName: "Vienna",
+          boundingBox: [16.2, 48.1, 16.6, 48.35],
+        },
+        boundary,
+        firstDivisionAdminLevel: null,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+
+    // Current summary before join should include seekerOnly: true
+    const summaryRes = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+    });
+    expect(summaryRes.statusCode).toBe(200);
+    const summary = summaryRes.json<{ hasGame: boolean; game: { seekerOnly: boolean } }>();
+    expect(summary.hasGame).toBe(true);
+    expect(summary.game.seekerOnly).toBe(true);
+
+    // Attempting to join as HIDER must be rejected
+    const hiderJoinRes = await app.inject({
+      method: "POST",
+      url: "/api/game/join",
+      payload: { displayName: "HiderAttempt", role: "HIDER" },
+    });
+    expect(hiderJoinRes.statusCode).toBe(400);
+    expect(hiderJoinRes.json<{ error: string }>().error).toMatch(/Seeker-only mode/i);
+
+    // Joining as SEEKER must succeed
+    const seekerJoinRes = await app.inject({
+      method: "POST",
+      url: "/api/game/join",
+      payload: { displayName: "LeadSeeker", role: "SEEKER" },
+    });
+    expect(seekerJoinRes.statusCode).toBe(201);
+    const seekerToken = seekerJoinRes.json<{ token: string }>().token;
+
+    // Seeker state contains seekerOnly: true
+    const stateRes = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: auth(seekerToken),
+    });
+    expect(stateRes.statusCode).toBe(200);
+    const state = stateRes.json<GameState>();
+    expect(state.game.seekerOnly).toBe(true);
+
+    // Start game
+    await app.inject({
+      method: "POST",
+      url: "/api/game/start",
+      headers: auth(seekerToken),
+    });
+
+    // Create a radar question draft
+    const questionRes = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seekerToken),
+      payload: {
+        definitionId: "radar.standard",
+        parameters: { center: [16.37, 48.2], radiusMeters: 2000 },
+      },
+    });
+    expect(questionRes.statusCode).toBe(201);
+    const questionId = questionRes.json<{ id: string }>().id;
+
+    // Ask question -> status becomes PENDING
+    const askRes = await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/ask`,
+      headers: auth(seekerToken),
+    });
+    expect(askRes.statusCode).toBe(200);
+
+    // In Seeker-only mode, Seeker records the answer received externally
+    const answerRes = await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/answer`,
+      headers: auth(seekerToken),
+      payload: { answer: "INSIDE" },
+    });
+    expect(answerRes.statusCode).toBe(200);
+
+    // Apply question to Possible Area
+    const applyRes = await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/apply`,
+      headers: auth(seekerToken),
+    });
+    expect(applyRes.statusCode).toBe(200);
+
+    // Check updated state: question is APPLIED and Possible Area is shrunk
+    const finalStateRes = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: auth(seekerToken),
+    });
+    const finalState = finalStateRes.json<GameState>();
+    const appliedQuestion = finalState.questions.find((q) => q.id === questionId);
+    expect(appliedQuestion?.status).toBe("APPLIED");
+    expect(appliedQuestion?.answer).toBe("INSIDE");
+
+    // Center point should be within possible area
+    expect(
+      turf.booleanPointInPolygon(turf.point([16.37, 48.2]), finalState.game.possibleArea!),
+    ).toBe(true);
+    // Point far away (e.g. 10km away) should not be within possible area
+    expect(
+      turf.booleanPointInPolygon(turf.point([16.5, 48.3]), finalState.game.possibleArea!),
+    ).toBe(false);
+  });
 });

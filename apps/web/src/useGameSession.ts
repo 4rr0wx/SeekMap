@@ -11,6 +11,7 @@ export type GameSummary = {
     phase: string;
     lifecycle: string;
     hiderAssistance: boolean;
+    seekerOnly: boolean;
   };
 };
 
