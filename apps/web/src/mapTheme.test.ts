@@ -3,10 +3,13 @@ import type { AreaFeature, MapFeature, QuestionInstance } from "@hideseek/shared
 import { describe, expect, it } from "vitest";
 import {
   createGameAreaLayers,
+  createTransitLineColorExpression,
   filterVisibleQuestions,
+  getTransitLineColor,
   MAP_COLORS,
   MAP_LEGEND_SECTIONS,
   processQuestionFeatures,
+  TRANSIT_COLORS,
 } from "./mapTheme";
 
 describe("MAP_COLORS", () => {
@@ -43,6 +46,32 @@ describe("MAP_COLORS", () => {
     // Issue #6 regression check: Datasets must be distinguishable from transit lines
     expect(MAP_COLORS.datasetLine).not.toBe(MAP_COLORS.transitLine);
     expect(MAP_COLORS.datasetFill).not.toBe(MAP_COLORS.transitLine);
+    expect(MAP_COLORS.datasetLine).not.toBe(TRANSIT_COLORS.tram);
+    expect(MAP_COLORS.datasetLine).not.toBe(TRANSIT_COLORS.subway);
+  });
+
+  it("ensures transit modes have distinct colors based on category", () => {
+    // Issue #22: Trams should have a different colour to subways
+    expect(TRANSIT_COLORS.tram).not.toBe(TRANSIT_COLORS.subway);
+    expect(TRANSIT_COLORS.tram).not.toBe(TRANSIT_COLORS.train);
+    expect(TRANSIT_COLORS.subway).not.toBe(TRANSIT_COLORS.train);
+    expect(TRANSIT_COLORS.light_rail).not.toBe(TRANSIT_COLORS.tram);
+    expect(TRANSIT_COLORS.light_rail).not.toBe(TRANSIT_COLORS.subway);
+
+    const modeColors = [
+      TRANSIT_COLORS.train,
+      TRANSIT_COLORS.light_rail,
+      TRANSIT_COLORS.subway,
+      TRANSIT_COLORS.tram,
+    ];
+    const uniqueColors = new Set(modeColors);
+    expect(uniqueColors.size).toBe(4);
+
+    for (const color of modeColors) {
+      expect(color).not.toBe(MAP_COLORS.possibleLine);
+      expect(color).not.toBe(MAP_COLORS.possibleFill);
+      expect(color).not.toBe(MAP_COLORS.datasetLine);
+    }
   });
 
   it("ensures interaction point A and point B are visually distinct", () => {
@@ -52,6 +81,37 @@ describe("MAP_COLORS", () => {
   it("ensures seeker markers and user GPS have distinct styling", () => {
     expect(MAP_COLORS.seekerMarkerFill).not.toBe(MAP_COLORS.localGpsFill);
     expect(MAP_COLORS.seekerMarkerFill).not.toBe(MAP_COLORS.pointStartA);
+  });
+});
+
+describe("transit line color helpers", () => {
+  it("resolves transit colors based on transitMode or railway property", () => {
+    expect(getTransitLineColor({ transitMode: "tram" })).toBe(MAP_COLORS.transitTramLine);
+    expect(getTransitLineColor({ railway: "tram" })).toBe(MAP_COLORS.transitTramLine);
+    expect(getTransitLineColor({ transitMode: "subway" })).toBe(MAP_COLORS.transitSubwayLine);
+    expect(getTransitLineColor({ railway: "subway" })).toBe(MAP_COLORS.transitSubwayLine);
+    expect(getTransitLineColor({ transitMode: "train" })).toBe(MAP_COLORS.transitTrainLine);
+    expect(getTransitLineColor({ railway: "rail" })).toBe(MAP_COLORS.transitTrainLine);
+    expect(getTransitLineColor({ transitMode: "light_rail" })).toBe(
+      MAP_COLORS.transitLightRailLine,
+    );
+    expect(getTransitLineColor({ railway: "light_rail" })).toBe(MAP_COLORS.transitLightRailLine);
+  });
+
+  it("falls back to default transit line color for unknown or missing properties", () => {
+    expect(getTransitLineColor(null)).toBe(MAP_COLORS.transitLine);
+    expect(getTransitLineColor({})).toBe(MAP_COLORS.transitLine);
+    expect(getTransitLineColor({ railway: "unknown" })).toBe(MAP_COLORS.transitLine);
+  });
+
+  it("creates a valid MapLibre case expression for line-color", () => {
+    const expr = createTransitLineColorExpression() as unknown[];
+    expect(Array.isArray(expr)).toBe(true);
+    expect(expr[0]).toBe("case");
+    expect(expr).toContain(MAP_COLORS.transitTramLine);
+    expect(expr).toContain(MAP_COLORS.transitSubwayLine);
+    expect(expr).toContain(MAP_COLORS.transitTrainLine);
+    expect(expr).toContain(MAP_COLORS.transitLightRailLine);
   });
 });
 
@@ -107,6 +167,10 @@ describe("MAP_LEGEND_SECTIONS", () => {
     expect(allItemIds).toContain("point-a");
     expect(allItemIds).toContain("point-b");
     expect(allItemIds).toContain("transit-lines");
+    expect(allItemIds).toContain("transit-train");
+    expect(allItemIds).toContain("transit-subway");
+    expect(allItemIds).toContain("transit-tram");
+    expect(allItemIds).toContain("transit-light-rail");
     expect(allItemIds).toContain("transit-stations");
     expect(allItemIds).toContain("datasets");
     expect(allItemIds).toContain("seeker-markers");

@@ -78,10 +78,77 @@ describe("OSM transit normalization", () => {
       const result = await service.transit([16.2, 48.1, 16.4, 48.3], ["train"]);
       expect(result.lines.features).toHaveLength(1);
       expect(result.lines.features[0]?.geometry.type).toBe("LineString");
+      expect(result.lines.features[0]?.properties?.transitMode).toBe("train");
       expect(result.stations.features).toHaveLength(1);
       expect(result.stations.features[0]?.properties?.name).toBe("Central");
       expect(decodeURIComponent(requestBody)).toContain('way["railway"~"^(rail)$"]');
       expect(requestBody).not.toContain("bus");
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("normalizes subway, tram, and light rail modes onto feature properties", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            version: 0.6,
+            elements: [
+              {
+                type: "way",
+                id: 10,
+                nodes: [1, 2],
+                geometry: [
+                  { lat: 48.2, lon: 16.3 },
+                  { lat: 48.21, lon: 16.31 },
+                ],
+                tags: { name: "U1", railway: "subway" },
+              },
+              {
+                type: "way",
+                id: 11,
+                nodes: [3, 4],
+                geometry: [
+                  { lat: 48.22, lon: 16.32 },
+                  { lat: 48.23, lon: 16.33 },
+                ],
+                tags: { name: "Line 1", railway: "tram" },
+              },
+              {
+                type: "way",
+                id: 12,
+                nodes: [5, 6],
+                geometry: [
+                  { lat: 48.24, lon: 16.34 },
+                  { lat: 48.25, lon: 16.35 },
+                ],
+                tags: { name: "S45", railway: "light_rail" },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig());
+      const result = await service.transit(
+        [16.2, 48.1, 16.4, 48.3],
+        ["subway", "tram", "light_rail"],
+      );
+      expect(result.lines.features).toHaveLength(3);
+
+      const subwayLine = result.lines.features.find((f) => f.properties?.name === "U1");
+      expect(subwayLine?.properties?.transitMode).toBe("subway");
+
+      const tramLine = result.lines.features.find((f) => f.properties?.name === "Line 1");
+      expect(tramLine?.properties?.transitMode).toBe("tram");
+
+      const lightRailLine = result.lines.features.find((f) => f.properties?.name === "S45");
+      expect(lightRailLine?.properties?.transitMode).toBe("light_rail");
     } finally {
       database.sqlite.close();
     }

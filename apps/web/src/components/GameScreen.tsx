@@ -780,14 +780,14 @@ function DataPanel({
                 disabled={busy}
                 onClick={() => void load("/api/game/subdivisions")}
               >
-                Load First Division
+                {state.game.subdivisions ? "Reload First Division" : "Load First Division"}
               </button>
               <button
                 className="button secondary"
                 disabled={busy}
                 onClick={() => void load("/api/game/transit")}
               >
-                Load transit
+                {state.game.transitLines ? "Reload transit" : "Load transit"}
               </button>
             </div>
           )}

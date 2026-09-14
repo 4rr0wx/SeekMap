@@ -31,6 +31,7 @@ import {
   type SubdivisionLevel,
 } from "../api";
 import type { GameSummary } from "../useGameSession";
+import { MAP_COLORS } from "../mapTheme";
 import { AreaPreview } from "./AreaPreview";
 
 export interface SelectedBoundary {
@@ -637,12 +638,12 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
             <div className="transit-config">
               {(
                 [
-                  ["train", "Train"],
-                  ["light_rail", "S-Bahn / light rail"],
-                  ["subway", "Subway / U-Bahn"],
-                  ["tram", "Tram"],
+                  ["train", "Train", MAP_COLORS.transitTrainLine],
+                  ["light_rail", "S-Bahn / light rail", MAP_COLORS.transitLightRailLine],
+                  ["subway", "Subway / U-Bahn", MAP_COLORS.transitSubwayLine],
+                  ["tram", "Tram", MAP_COLORS.transitTramLine],
                 ] as const
-              ).map(([value, label]) => (
+              ).map(([value, label, color]) => (
                 <label className="switch-row" key={value}>
                   <input
                     type="checkbox"
@@ -655,7 +656,18 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
                       )
                     }
                   />
-                  <span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: "16px",
+                        height: "4px",
+                        borderRadius: "2px",
+                        backgroundColor: color,
+                        flexShrink: 0,
+                      }}
+                      aria-hidden="true"
+                    />
                     <strong>{label}</strong>
                   </span>
                 </label>

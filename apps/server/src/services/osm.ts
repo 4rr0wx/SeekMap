@@ -217,7 +217,21 @@ export class OsmService {
     const stations: Feature<Point>[] = [];
     for (const feature of converted.features) {
       if (feature.geometry?.type === "LineString" || feature.geometry?.type === "MultiLineString") {
-        lines.push(feature as Feature<LineString | MultiLineString>);
+        const properties = { ...(feature.properties ?? {}) };
+        const railway = properties.railway;
+        const transitMode: TransitMode | undefined =
+          railway === "rail" || railway === "train"
+            ? "train"
+            : railway === "subway" || railway === "tram" || railway === "light_rail"
+              ? railway
+              : undefined;
+        if (transitMode) {
+          properties.transitMode = transitMode;
+        }
+        lines.push({
+          ...(feature as Feature<LineString | MultiLineString>),
+          properties,
+        });
       } else if (feature.geometry?.type === "Point") {
         stations.push(feature as Feature<Point>);
       }
