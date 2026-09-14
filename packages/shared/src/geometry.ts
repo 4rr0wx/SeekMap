@@ -11,10 +11,26 @@ export function normalizeArea(
 ): AreaFeature {
   if (input.type === "FeatureCollection") {
     if (input.features.length === 0) throw new Error("Area contains no polygon features");
-    if (input.features.length === 1) return input.features[0] as AreaFeature;
+    if (input.features.length === 1) {
+      const feature = input.features[0] as AreaFeature;
+      if (feature.geometry?.type !== "Polygon" && feature.geometry?.type !== "MultiPolygon") {
+        throw new Error("Area feature must have Polygon or MultiPolygon geometry");
+      }
+      if (!feature.geometry.coordinates || feature.geometry.coordinates.length === 0) {
+        throw new Error("Area polygon must contain at least one ring");
+      }
+      return feature;
+    }
     const united = turf.union(input as FeatureCollection<Polygon | MultiPolygon>);
     if (!united) throw new Error("Area polygons could not be combined");
     return asFeature(united as AreaFeature);
+  }
+  const geom = input.type === "Feature" ? input.geometry : input;
+  if (!geom || (geom.type !== "Polygon" && geom.type !== "MultiPolygon")) {
+    throw new Error("Area feature must have Polygon or MultiPolygon geometry");
+  }
+  if (!geom.coordinates || geom.coordinates.length === 0) {
+    throw new Error("Area polygon must contain at least one ring");
   }
   return asFeature(input as AreaFeature | AreaGeometry);
 }
@@ -27,6 +43,42 @@ export function intersectAreas(left: AreaFeature, right: AreaFeature): AreaFeatu
 export function subtractArea(left: AreaFeature, right: AreaFeature): AreaFeature | null {
   const result = turf.difference(turf.featureCollection([left, right]) as any);
   return result ? normalizeArea(result as AreaFeature) : null;
+}
+
+export interface BoundaryOperation {
+  mode: "ADD" | "SUBTRACT";
+  boundary: AreaFeature;
+}
+
+export function combineBoundaries(operations: BoundaryOperation[]): AreaFeature | null {
+  const addOps = operations.filter((op) => op.mode === "ADD");
+  if (addOps.length === 0) return null;
+
+  let current: AreaFeature;
+  try {
+    const firstAdd = addOps[0];
+    if (!firstAdd) return null;
+    if (addOps.length === 1) {
+      current = normalizeArea(firstAdd.boundary);
+    } else {
+      current = normalizeArea(turf.featureCollection(addOps.map((op) => op.boundary)));
+    }
+  } catch {
+    return null;
+  }
+
+  const subtractOps = operations.filter((op) => op.mode === "SUBTRACT");
+  for (const op of subtractOps) {
+    try {
+      const next = subtractArea(current, op.boundary);
+      if (!next) return null;
+      current = next;
+    } catch {
+      return null;
+    }
+  }
+
+  return current;
 }
 
 export function applyGeometryEffect(
