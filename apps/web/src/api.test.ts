@@ -23,5 +23,22 @@ describe("API request headers", () => {
     expect(init.body).toBeUndefined();
     expect(headers.has("Content-Type")).toBe(false);
     expect(headers.get("Authorization")).toBe("Bearer seeker-token");
+    expect(init.cache).toBe("no-store");
+  });
+
+  it("sends cache: no-store on API requests to bypass browser cache", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { currentGame } = await import("./api");
+    await currentGame("hider-token");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.cache).toBe("no-store");
   });
 });

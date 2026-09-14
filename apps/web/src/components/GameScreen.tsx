@@ -113,6 +113,7 @@ export function GameScreen({
     Partial<Record<"A" | "B", [number, number]>>
   >({});
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
+  const [historyInspectedId, setHistoryInspectedId] = useState<string | null>(null);
   const [draftQuestionGeometry, setDraftQuestionGeometry] = useState<
     MapFeatureCollection | MapFeature | null
   >(null);
@@ -152,8 +153,15 @@ export function GameScreen({
   const activeQuestions = state.questions.filter((question) => question.status !== "APPLIED");
 
   useEffect(() => {
-    if (activeQuestions[0] && !selectedQuestionId) setSelectedQuestionId(activeQuestions[0].id);
-  }, [activeQuestions, selectedQuestionId]);
+    if (activeQuestions.length > 0) {
+      const isSelectedActive = activeQuestions.some((q) => q.id === selectedQuestionId);
+      if (!isSelectedActive) {
+        setSelectedQuestionId(activeQuestions[0]!.id);
+      }
+    } else if (selectedQuestionId && selectedQuestionId !== historyInspectedId) {
+      setSelectedQuestionId(null);
+    }
+  }, [activeQuestions, selectedQuestionId, historyInspectedId]);
 
   function requestGps(questionTarget?: "A" | "B") {
     if (!window.isSecureContext) {
@@ -431,7 +439,10 @@ export function GameScreen({
             questions={activeQuestions}
             localPosition={localPosition}
             onRequestGps={() => requestGps()}
-            onSelect={setSelectedQuestionId}
+            onSelect={(id) => {
+              setSelectedQuestionId(id);
+              setHistoryInspectedId(null);
+            }}
             onEdit={(question) => {
               setPickedQuestionPoint(null);
               setDraftQuestionPoints({});
@@ -453,6 +464,10 @@ export function GameScreen({
             onPickFromMap={(target) => setInteraction(target === "A" ? "question-a" : "question-b")}
             onRequestGps={requestGps}
             onPreviewChange={setDraftQuestionGeometry}
+            onSelect={setSelectedQuestionId}
+            onPointPicked={(target, point) =>
+              setDraftQuestionPoints((curr) => ({ ...curr, [target]: point }))
+            }
             onClose={() => {
               setComposer({ open: false, question: null });
               setPickedQuestionPoint(null);
@@ -473,6 +488,7 @@ export function GameScreen({
           onClose={() => setPanel(null)}
           onSelect={(id) => {
             setSelectedQuestionId(id);
+            setHistoryInspectedId(id);
             setPanel(null);
           }}
           onEdit={(question) => {

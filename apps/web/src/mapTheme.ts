@@ -1,7 +1,12 @@
 import * as turf from "@turf/turf";
 import type { Feature, Polygon, MultiPolygon } from "geojson";
 import type { LayerSpecification } from "maplibre-gl";
-import { intersectAreas, type AreaFeature, type MapFeature } from "@hideseek/shared";
+import {
+  intersectAreas,
+  type AreaFeature,
+  type MapFeature,
+  type QuestionInstance,
+} from "@hideseek/shared";
 
 export const MAP_COLORS = {
   // Game Boundary
@@ -429,6 +434,31 @@ export function processQuestionFeatures(
                 ...(feature.properties ?? {}),
               },
             } as MapFeature);
+
+            try {
+              const clippedLine = turf.polygonToLine(clipped as Feature<Polygon | MultiPolygon>);
+              if (clippedLine) {
+                if (clippedLine.type === "FeatureCollection") {
+                  for (const f of clippedLine.features) {
+                    result.push({
+                      ...f,
+                      properties: {
+                        ...(feature.properties ?? {}),
+                      },
+                    } as MapFeature);
+                  }
+                } else {
+                  result.push({
+                    ...clippedLine,
+                    properties: {
+                      ...(feature.properties ?? {}),
+                    },
+                  } as MapFeature);
+                }
+              }
+            } catch {
+              // Ignore clipped line generation failure
+            }
           }
         } catch {
           result.push(feature);
@@ -442,4 +472,16 @@ export function processQuestionFeatures(
   }
 
   return result;
+}
+
+export function filterVisibleQuestions(
+  questions: QuestionInstance[],
+  selectedQuestionId: string | null,
+): QuestionInstance[] {
+  return questions.filter(
+    (question) =>
+      question.enabled &&
+      question.visualization &&
+      (!selectedQuestionId ? question.status !== "APPLIED" : question.id === selectedQuestionId),
+  );
 }

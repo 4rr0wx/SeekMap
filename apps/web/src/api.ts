@@ -26,7 +26,7 @@ export async function api<T>(path: string, init: RequestInit = {}, token?: strin
     headers.set("Content-Type", "application/json");
   }
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, { cache: "no-store", ...init, headers });
   const body = (await response.json().catch(() => ({}))) as { error?: string } & T;
   if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
   return body;
