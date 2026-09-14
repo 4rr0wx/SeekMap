@@ -6,6 +6,76 @@ import { OsmService } from "./osm";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OSM transit normalization", () => {
+  it("builds a named, in-boundary POI dataset without caching it beyond the game", async () => {
+    let requestBody = "";
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      requestBody = String(init.body);
+      return new Response(
+        JSON.stringify({
+          elements: [
+            {
+              type: "node",
+              id: 1,
+              lat: 48.2,
+              lon: 16.3,
+              tags: { name: "Museum", tourism: "museum" },
+            },
+            {
+              type: "way",
+              id: 2,
+              center: { lat: 48.21, lon: 16.31 },
+              tags: { name: "Golf Club", leisure: "golf_course" },
+            },
+            {
+              type: "node",
+              id: 3,
+              lat: 49,
+              lon: 17,
+              tags: { name: "Outside", amenity: "cafe" },
+            },
+            { type: "node", id: 4, lat: 48.22, lon: 16.32, tags: { amenity: "cafe" } },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig());
+      const boundary = {
+        type: "Feature" as const,
+        properties: {},
+        geometry: {
+          type: "Polygon" as const,
+          coordinates: [
+            [
+              [16.2, 48.1],
+              [16.4, 48.1],
+              [16.4, 48.3],
+              [16.2, 48.3],
+              [16.2, 48.1],
+            ],
+          ],
+        },
+      };
+
+      const result = await service.pointsOfInterest([16.2, 48.1, 16.4, 48.3], boundary);
+
+      expect(result.features.map((feature) => feature.properties?.name)).toEqual([
+        "Museum",
+        "Golf Club",
+      ]);
+      expect(result.features[1]?.geometry).toEqual({ type: "Point", coordinates: [16.31, 48.21] });
+      expect(decodeURIComponent(requestBody)).toContain('nwr["name"]["amenity"]');
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
   it("discovers generic child administrative levels without area-specific rules", async () => {
     vi.stubGlobal(
       "fetch",

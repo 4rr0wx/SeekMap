@@ -100,6 +100,7 @@ export const datasets = sqliteTable("datasets", {
   sourceLibraryId: text("source_library_id").references(() => datasetLibrary.id, {
     onDelete: "set null",
   }),
+  temporary: integer("temporary", { mode: "boolean" }).notNull().default(false),
   name: text("name").notNull(),
   category: text("category").notNull(),
   originalFilename: text("original_filename").notNull(),

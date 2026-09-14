@@ -12,6 +12,7 @@ import { GameStore } from "./store";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
+  vi.unstubAllGlobals();
   while (cleanups.length) await cleanups.pop()?.();
 });
 
@@ -169,6 +170,100 @@ describe("server game integrity", () => {
       headers: auth(joined.seeker.token),
     });
     expect(rejected.statusCode).toBe(409);
+  });
+
+  it("loads game-only OSM POIs on request and removes them when the game ends", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              elements: [
+                {
+                  type: "node",
+                  id: 101,
+                  lat: 48.2,
+                  lon: 16.3,
+                  tags: { name: "Test Museum", tourism: "museum" },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const { app, database } = await fixture();
+    const { seeker } = await createAndJoin(app);
+
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/game/start",
+      headers: auth(seeker.token),
+      payload: { loadOsmPois: true },
+    });
+
+    expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({ ok: true, osmPois: 1 });
+    const runningState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(runningState.game.phase).toBe("HIDING");
+    expect(runningState.datasets).toMatchObject([
+      {
+        name: "OpenStreetMap POIs",
+        temporary: true,
+        featureCount: 1,
+      },
+    ]);
+    expect(
+      database.sqlite.prepare("SELECT temporary, source_library_id FROM datasets").get(),
+    ).toEqual({ temporary: 1, source_library_id: null });
+    expect((await app.inject({ method: "GET", url: "/api/dataset-library" })).json()).toEqual({
+      datasets: [],
+    });
+
+    const restartedStore = new GameStore(database);
+    expect(restartedStore.getState(seeker.token).datasets).toMatchObject([
+      { name: "OpenStreetMap POIs", temporary: true, featureCount: 1 },
+    ]);
+    expect(restartedStore.listDatasetLibrary()).toEqual([]);
+
+    const ended = await app.inject({
+      method: "POST",
+      url: "/api/game/end",
+      headers: auth(seeker.token),
+    });
+    expect(ended.statusCode).toBe(200);
+    const endedState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(endedState.game.phase).toBe("ENDED");
+    expect(endedState.datasets).toEqual([]);
+  });
+
+  it("keeps the game in the lobby when the OSM POI request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Overpass unavailable", { status: 504 })),
+    );
+    const { app } = await fixture();
+    const { seeker } = await createAndJoin(app);
+
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/game/start",
+      headers: auth(seeker.token),
+      payload: { loadOsmPois: true },
+    });
+
+    expect(started.statusCode).toBe(500);
+    expect(started.json<{ error: string }>().error).toContain("OpenStreetMap service returned 504");
+    const state = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(state.game.phase).toBe("LOBBY");
+    expect(state.datasets).toEqual([]);
   });
 
   it("reuses optional library datasets in a later game", async () => {

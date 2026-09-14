@@ -72,7 +72,11 @@ export class GameStore {
   }
 
   private adoptExistingDatasets(): void {
-    const unlinked = this.db.select().from(datasets).where(isNull(datasets.sourceLibraryId)).all();
+    const unlinked = this.db
+      .select()
+      .from(datasets)
+      .where(and(isNull(datasets.sourceLibraryId), eq(datasets.temporary, false)))
+      .all();
     for (const item of unlinked) {
       const libraryId = this.saveDatasetLibrary({
         name: item.name,
@@ -251,6 +255,7 @@ export class GameStore {
               id: randomUUID(),
               gameId: id,
               sourceLibraryId: item.id,
+              temporary: false,
               name: item.name,
               category: "OTHER",
               originalFilename: item.originalFilename,
@@ -417,6 +422,7 @@ export class GameStore {
         id: row.id,
         name: row.name,
         category: row.category as DatasetCategory,
+        temporary: row.temporary,
         originalFilename: row.originalFilename,
         geojson: decode<MapFeatureCollection>(row.geojson)!,
         featureCount: row.featureCount,
@@ -482,22 +488,60 @@ export class GameStore {
     this.bump(player.gameId);
   }
 
-  startGame(token: string | undefined): void {
+  startGame(
+    token: string | undefined,
+    temporaryDataset?: {
+      name: string;
+      category: DatasetCategory;
+      originalFilename: string;
+      geojson: MapFeatureCollection;
+    },
+  ): void {
     const player = this.requireSeeker(token);
-    const game = this.currentRow();
-    if (!game || game.id !== player.gameId) throw new DomainError("No active game", 404);
-    if (game.phase !== "LOBBY") throw new DomainError("The game has already started", 409);
     const timestamp = now();
-    this.db
-      .update(games)
-      .set({
-        phase: "HIDING",
-        phaseStartedAt: timestamp,
-        updatedAt: timestamp,
-        revision: game.revision + 1,
-      })
-      .where(eq(games.id, game.id))
-      .run();
+    this.db.transaction((tx) => {
+      const game = tx.select().from(games).where(eq(games.id, player.gameId)).get();
+      if (!game) throw new DomainError("No active game", 404);
+      if (game.phase !== "LOBBY") throw new DomainError("The game has already started", 409);
+      if (temporaryDataset) {
+        const existingDataset = tx
+          .select({ id: datasets.id })
+          .from(datasets)
+          .where(eq(datasets.gameId, game.id))
+          .limit(1)
+          .get();
+        if (existingDataset) {
+          throw new DomainError(
+            "OpenStreetMap POIs can only be loaded when the game has no datasets",
+            409,
+          );
+        }
+        tx.insert(datasets)
+          .values({
+            id: randomUUID(),
+            gameId: game.id,
+            sourceLibraryId: null,
+            temporary: true,
+            name: temporaryDataset.name,
+            category: temporaryDataset.category,
+            originalFilename: temporaryDataset.originalFilename,
+            geojson: encode(temporaryDataset.geojson),
+            featureCount: temporaryDataset.geojson.features.length,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })
+          .run();
+      }
+      tx.update(games)
+        .set({
+          phase: "HIDING",
+          phaseStartedAt: timestamp,
+          updatedAt: timestamp,
+          revision: game.revision + 1,
+        })
+        .where(eq(games.id, game.id))
+        .run();
+    });
   }
 
   transitionTimer(): boolean {
@@ -524,17 +568,21 @@ export class GameStore {
     if (!game || game.id !== player.gameId) throw new DomainError("No current game", 404);
     if (game.phase === "ENDED") return;
     const timestamp = now();
-    this.db
-      .update(games)
-      .set({
-        phase: "ENDED",
-        lifecycle: "ENDED",
-        endedAt: timestamp,
-        updatedAt: timestamp,
-        revision: game.revision + 1,
-      })
-      .where(eq(games.id, game.id))
-      .run();
+    this.db.transaction((tx) => {
+      tx.delete(datasets)
+        .where(and(eq(datasets.gameId, game.id), eq(datasets.temporary, true)))
+        .run();
+      tx.update(games)
+        .set({
+          phase: "ENDED",
+          lifecycle: "ENDED",
+          endedAt: timestamp,
+          updatedAt: timestamp,
+          revision: game.revision + 1,
+        })
+        .where(eq(games.id, game.id))
+        .run();
+    });
   }
 
   resetGame(token: string | undefined): void {
@@ -558,6 +606,7 @@ export class GameStore {
             id: row.id,
             name: row.name,
             category: row.category as DatasetCategory,
+            temporary: row.temporary,
             originalFilename: row.originalFilename,
             geojson: decode<MapFeatureCollection>(row.geojson)!,
             featureCount: row.featureCount,
@@ -947,6 +996,7 @@ export class GameStore {
         id,
         gameId: player.gameId,
         sourceLibraryId,
+        temporary: false,
         name: input.name,
         category: input.category,
         originalFilename: input.originalFilename,
@@ -998,11 +1048,19 @@ export class GameStore {
   ): void {
     const player = this.requireSeeker(token);
     const row = this.db
-      .select({ id: datasets.id, name: datasets.name, sourceLibraryId: datasets.sourceLibraryId })
+      .select({
+        id: datasets.id,
+        name: datasets.name,
+        sourceLibraryId: datasets.sourceLibraryId,
+        temporary: datasets.temporary,
+      })
       .from(datasets)
       .where(and(eq(datasets.id, id), eq(datasets.gameId, player.gameId)))
       .get();
     if (!row) throw new DomainError("Dataset not found", 404);
+    if (row.temporary) {
+      throw new DomainError("Temporary OpenStreetMap POIs cannot be replaced", 409);
+    }
     const sourceLibraryId = row.sourceLibraryId
       ? row.sourceLibraryId
       : this.saveDatasetLibrary({ ...input, name: row.name });
