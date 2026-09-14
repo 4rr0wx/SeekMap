@@ -1,5 +1,6 @@
 import * as turf from "@turf/turf";
 import type { Feature, Polygon, MultiPolygon } from "geojson";
+import type { LayerSpecification } from "maplibre-gl";
 import { intersectAreas, type AreaFeature, type MapFeature } from "@hideseek/shared";
 
 export const MAP_COLORS = {
@@ -119,6 +120,49 @@ export interface LegendItem {
     pointStroke?: string;
     glow?: boolean;
   };
+}
+
+export function createGameAreaLayers(): LayerSpecification[] {
+  return [
+    {
+      id: "boundary-fill",
+      type: "fill",
+      source: "boundary",
+      paint: {
+        "fill-color": MAP_COLORS.boundaryFill,
+        "fill-opacity": MAP_COLORS.boundaryFillOpacity,
+      },
+    },
+    {
+      id: "possible-fill",
+      type: "fill",
+      source: "possible",
+      paint: {
+        "fill-color": MAP_COLORS.possibleFill,
+        "fill-opacity": MAP_COLORS.possibleFillOpacity,
+      },
+    },
+    {
+      id: "possible-line",
+      type: "line",
+      source: "possible",
+      paint: {
+        "line-color": MAP_COLORS.possibleLine,
+        "line-width": MAP_COLORS.possibleLineWidth,
+      },
+    },
+    {
+      // Keep the fixed game boundary above the changing Possible Area. These geometries are
+      // identical at the beginning of a game, so drawing this line earlier hides it completely.
+      id: "boundary-line",
+      type: "line",
+      source: "boundary",
+      paint: {
+        "line-color": MAP_COLORS.boundaryLine,
+        "line-width": MAP_COLORS.boundaryLineWidth,
+      },
+    },
+  ];
 }
 
 export interface LegendSection {

@@ -1,7 +1,12 @@
 import * as turf from "@turf/turf";
 import type { AreaFeature, MapFeature } from "@hideseek/shared";
 import { describe, expect, it } from "vitest";
-import { MAP_COLORS, MAP_LEGEND_SECTIONS, processQuestionFeatures } from "./mapTheme";
+import {
+  createGameAreaLayers,
+  MAP_COLORS,
+  MAP_LEGEND_SECTIONS,
+  processQuestionFeatures,
+} from "./mapTheme";
 
 describe("MAP_COLORS", () => {
   it("defines valid hex colors for all color properties", () => {
@@ -46,6 +51,15 @@ describe("MAP_COLORS", () => {
   it("ensures seeker markers and user GPS have distinct styling", () => {
     expect(MAP_COLORS.seekerMarkerFill).not.toBe(MAP_COLORS.localGpsFill);
     expect(MAP_COLORS.seekerMarkerFill).not.toBe(MAP_COLORS.pointStartA);
+  });
+});
+
+describe("createGameAreaLayers", () => {
+  it("draws the fixed game boundary above the Possible Area", () => {
+    const layerIds = createGameAreaLayers().map((layer) => layer.id);
+
+    expect(layerIds).toEqual(["boundary-fill", "possible-fill", "possible-line", "boundary-line"]);
+    expect(layerIds.indexOf("boundary-line")).toBeGreaterThan(layerIds.indexOf("possible-line"));
   });
 });
 

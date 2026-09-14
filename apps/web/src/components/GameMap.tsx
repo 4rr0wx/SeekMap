@@ -9,7 +9,7 @@ import {
   type MapFeatureCollection,
   type PublicConfig,
 } from "@hideseek/shared";
-import { MAP_COLORS, processQuestionFeatures } from "../mapTheme";
+import { createGameAreaLayers, MAP_COLORS, processQuestionFeatures } from "../mapTheme";
 
 export interface MapLayers {
   possibleArea: boolean;
@@ -240,42 +240,7 @@ export function GameMap({
         "question-draft-point",
       ];
       for (const source of sources) map.addSource(source, { type: "geojson", data: empty });
-      map.addLayer({
-        id: "boundary-fill",
-        type: "fill",
-        source: "boundary",
-        paint: {
-          "fill-color": MAP_COLORS.boundaryFill,
-          "fill-opacity": MAP_COLORS.boundaryFillOpacity,
-        },
-      });
-      map.addLayer({
-        id: "boundary-line",
-        type: "line",
-        source: "boundary",
-        paint: {
-          "line-color": MAP_COLORS.boundaryLine,
-          "line-width": MAP_COLORS.boundaryLineWidth,
-        },
-      });
-      map.addLayer({
-        id: "possible-fill",
-        type: "fill",
-        source: "possible",
-        paint: {
-          "fill-color": MAP_COLORS.possibleFill,
-          "fill-opacity": MAP_COLORS.possibleFillOpacity,
-        },
-      });
-      map.addLayer({
-        id: "possible-line",
-        type: "line",
-        source: "possible",
-        paint: {
-          "line-color": MAP_COLORS.possibleLine,
-          "line-width": MAP_COLORS.possibleLineWidth,
-        },
-      });
+      for (const layer of createGameAreaLayers()) map.addLayer(layer);
       map.addLayer({
         id: "admin-line",
         type: "line",
