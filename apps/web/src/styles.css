@@ -581,7 +581,7 @@ textarea:focus {
   min-height: 72px;
   padding: max(10px, env(safe-area-inset-top)) 16px 10px;
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) auto auto auto;
+  grid-template-columns: minmax(150px, 1fr) auto auto auto auto;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--line);
@@ -1260,15 +1260,20 @@ textarea:focus {
     min-height: 90px;
   }
   .game-header {
-    grid-template-columns: minmax(80px, 1fr) auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto repeat(3, 40px);
+    gap: 6px;
     padding-left: 11px;
     padding-right: 9px;
   }
   .timer {
-    min-width: 92px;
+    min-width: 72px;
   }
   .timer strong {
     font-size: 1.15rem;
+  }
+  .game-header .header-action {
+    min-width: 40px;
+    min-height: 40px;
   }
   .bottom-bar {
     gap: 7px;

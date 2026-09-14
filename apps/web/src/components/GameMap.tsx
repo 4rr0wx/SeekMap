@@ -90,8 +90,10 @@ export function GameMap({
   const [mapLoaded, setMapLoaded] = useState(false);
   const onClickRef = useRef(onMapClick);
   const layersRef = useRef(layers);
+  const boundaryRef = useRef(state.game.boundary);
   onClickRef.current = onMapClick;
   layersRef.current = layers;
+  boundaryRef.current = state.game.boundary;
 
   const syncDataRef = useRef<() => void>(() => {});
 
@@ -218,9 +220,10 @@ export function GameMap({
 
   useEffect(() => {
     if (!container.current || mapRef.current) return;
-    const center = turf.centroid(state.game.boundary).geometry.coordinates as [number, number];
+    const mapContainer = container.current;
+    const center = turf.centroid(boundaryRef.current).geometry.coordinates as [number, number];
     const map = new maplibregl.Map({
-      container: container.current,
+      container: mapContainer,
       center,
       zoom: 9,
       attributionControl: false,
@@ -245,6 +248,8 @@ export function GameMap({
       },
     });
     mapRef.current = map;
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(mapContainer);
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     map.on("load", () => {
@@ -494,7 +499,7 @@ export function GameMap({
       });
       applyLayerVisibility(map, layersRef.current);
       syncDataRef.current();
-      const bounds = turf.bbox(state.game.boundary);
+      const bounds = turf.bbox(boundaryRef.current);
       map.fitBounds(
         [
           [bounds[0], bounds[1]],
@@ -507,15 +512,16 @@ export function GameMap({
     });
     map.on("click", (event) => onClickRef.current([event.lngLat.lng, event.lngLat.lat]));
     return () => {
+      resizeObserver.disconnect();
       setMapLoaded(false);
       map.remove();
       mapRef.current = null;
     };
-  }, [config.tileAttribution, config.tileUrl, state.game.boundary]);
+  }, [config.tileAttribution, config.tileUrl, state.game.id]);
 
   syncDataRef.current = () => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
+    if (!map || !map.isStyleLoaded()) return;
     setData(map, "boundary", state.game.boundary);
     setData(map, "possible", state.game.possibleArea ?? empty);
     setData(map, "questions", questionGeometry);
