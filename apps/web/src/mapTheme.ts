@@ -6,6 +6,7 @@ import {
   type AreaFeature,
   type MapFeature,
   type QuestionInstance,
+  type TransitMode,
 } from "@hideseek/shared";
 
 export const MAP_COLORS = {
@@ -69,6 +70,10 @@ export const MAP_COLORS = {
 
   // Transit Lines & Stations
   transitLine: "#0284c7",
+  transitTrainLine: "#0284c7",
+  transitSubwayLine: "#7c3aed",
+  transitTramLine: "#dc2626",
+  transitLightRailLine: "#0891b2",
   transitLineWidth: 2.5,
   transitLineOpacity: 0.85,
   stationFill: "#ffffff",
@@ -110,6 +115,43 @@ export const MAP_COLORS = {
 } as const;
 
 export type MapColorToken = keyof typeof MAP_COLORS;
+
+export const TRANSIT_COLORS: Record<TransitMode, string> = {
+  train: MAP_COLORS.transitTrainLine,
+  light_rail: MAP_COLORS.transitLightRailLine,
+  subway: MAP_COLORS.transitSubwayLine,
+  tram: MAP_COLORS.transitTramLine,
+};
+
+export function getTransitLineColor(properties?: Record<string, unknown> | null): string {
+  if (!properties) return MAP_COLORS.transitLine;
+  const mode = properties.transitMode ?? properties.railway;
+  if (mode === "tram") return MAP_COLORS.transitTramLine;
+  if (mode === "subway") return MAP_COLORS.transitSubwayLine;
+  if (mode === "light_rail") return MAP_COLORS.transitLightRailLine;
+  if (mode === "train" || mode === "rail") return MAP_COLORS.transitTrainLine;
+  return MAP_COLORS.transitLine;
+}
+
+export function createTransitLineColorExpression(): unknown {
+  return [
+    "case",
+    ["any", ["==", ["get", "transitMode"], "tram"], ["==", ["get", "railway"], "tram"]],
+    MAP_COLORS.transitTramLine,
+    ["any", ["==", ["get", "transitMode"], "subway"], ["==", ["get", "railway"], "subway"]],
+    MAP_COLORS.transitSubwayLine,
+    ["any", ["==", ["get", "transitMode"], "light_rail"], ["==", ["get", "railway"], "light_rail"]],
+    MAP_COLORS.transitLightRailLine,
+    [
+      "any",
+      ["==", ["get", "transitMode"], "train"],
+      ["==", ["get", "railway"], "rail"],
+      ["==", ["get", "railway"], "train"],
+    ],
+    MAP_COLORS.transitTrainLine,
+    MAP_COLORS.transitLine,
+  ];
+}
 
 export interface LegendItem {
   id: string;
@@ -309,8 +351,48 @@ export const MAP_LEGEND_SECTIONS: LegendSection[] = [
     title: "Transit & Datasets",
     items: [
       {
+        id: "transit-train",
+        label: "Train Lines",
+        description: "Heavy rail and passenger train routes loaded from OpenStreetMap.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.transitTrainLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        id: "transit-subway",
+        label: "Subway Lines",
+        description: "Underground and metro transit lines loaded from OpenStreetMap.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.transitSubwayLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        id: "transit-tram",
+        label: "Tram Lines",
+        description: "Streetcar and tram lines loaded from OpenStreetMap.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.transitTramLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        id: "transit-light-rail",
+        label: "Light Rail Lines",
+        description: "S-Bahn and light rail lines loaded from OpenStreetMap.",
+        type: "line",
+        swatch: {
+          stroke: MAP_COLORS.transitLightRailLine,
+          strokeWidth: 2.5,
+        },
+      },
+      {
         id: "transit-lines",
-        label: "Transit Lines",
+        label: "Transit Lines (General)",
         description: "Railway, tram, and subway lines loaded from OpenStreetMap.",
         type: "line",
         swatch: {

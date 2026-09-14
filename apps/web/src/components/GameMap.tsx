@@ -12,6 +12,7 @@ import {
 } from "@hideseek/shared";
 import {
   createGameAreaLayers,
+  createTransitLineColorExpression,
   filterVisibleQuestions,
   MAP_COLORS,
   processQuestionFeatures,
@@ -283,7 +284,7 @@ export function GameMap({
         type: "line",
         source: "transit-lines",
         paint: {
-          "line-color": MAP_COLORS.transitLine,
+          "line-color": createTransitLineColorExpression() as any,
           "line-width": MAP_COLORS.transitLineWidth,
           "line-opacity": MAP_COLORS.transitLineOpacity,
         },

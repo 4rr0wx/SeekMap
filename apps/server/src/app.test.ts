@@ -2,18 +2,24 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as turf from "@turf/turf";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { combineBoundaries, type AreaFeature, type GameState } from "@hideseek/shared";
 import { buildApp, type BuiltApp } from "./app";
 import { loadConfig } from "./config";
 import { openDatabase, type DatabaseBundle } from "./db/database";
+import { OsmService } from "./services/osm";
+import { GameStore } from "./store";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
 });
 
-async function fixture(path?: string, environment: NodeJS.ProcessEnv = {}) {
+async function fixture(
+  path?: string,
+  environment: NodeJS.ProcessEnv = {},
+  services?: { osm?: OsmService; store?: GameStore },
+) {
   const directory = path ?? mkdtempSync(join(tmpdir(), "hideseek-atlas-test-"));
   const config = loadConfig({
     DATA_DIR: directory,
@@ -21,7 +27,7 @@ async function fixture(path?: string, environment: NodeJS.ProcessEnv = {}) {
     ...environment,
   });
   const database = openDatabase(config.databasePath);
-  const built = await buildApp(config, database);
+  const built = await buildApp(config, database, services);
   cleanups.push(async () => {
     built.stopTimer();
     built.io.close();
@@ -983,5 +989,145 @@ describe("server game integrity", () => {
     expect(
       turf.booleanPointInPolygon(turf.point([16.5, 48.3]), finalState.game.possibleArea!),
     ).toBe(false);
+  });
+
+  it("automatically loads administrative boundaries and transit lines on game creation", async () => {
+    const mockSubdivisions = turf.featureCollection([
+      turf.polygon(
+        [
+          [
+            [16.2, 48.1],
+            [16.4, 48.1],
+            [16.4, 48.2],
+            [16.2, 48.2],
+            [16.2, 48.1],
+          ],
+        ],
+        { name: "District 1" },
+      ),
+    ]);
+
+    const mockTransitLines = turf.featureCollection([
+      turf.lineString(
+        [
+          [16.2, 48.1],
+          [16.3, 48.2],
+        ],
+        { name: "U1", railway: "subway", transitMode: "subway" },
+      ),
+      turf.lineString(
+        [
+          [16.3, 48.2],
+          [16.4, 48.3],
+        ],
+        { name: "Tram D", railway: "tram", transitMode: "tram" },
+      ),
+    ]);
+    const mockTransitStations = turf.featureCollection([
+      turf.point([16.3, 48.2], { name: "Karlsplatz" }),
+    ]);
+
+    const mockOsm = {
+      searchAreas: vi.fn(),
+      subdivisionLevels: vi.fn(),
+      subdivisions: vi.fn().mockResolvedValue(mockSubdivisions),
+      transit: vi.fn().mockResolvedValue({
+        lines: mockTransitLines,
+        stations: mockTransitStations,
+      }),
+    } as unknown as OsmService;
+
+    const { app } = await fixture(undefined, {}, { osm: mockOsm });
+
+    // Create game with syncOsm=true to await auto-loading
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/games?syncOsm=true",
+      payload: {
+        name: "Auto Load Test",
+        hidingDurationMinutes: 20,
+        hiderAssistance: true,
+        osm: {
+          osmType: "relation",
+          osmId: "109166",
+          displayName: "Vienna",
+          boundingBox: [16.2, 48.1, 16.6, 48.35],
+        },
+        boundary,
+        firstDivisionAdminLevel: 10,
+        transitModes: ["train", "subway", "tram"],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+
+    expect(mockOsm.subdivisions).toHaveBeenCalledWith("relation", "109166", 10);
+    expect(mockOsm.transit).toHaveBeenCalledWith(
+      [16.2, 48.1, 16.6, 48.35],
+      ["train", "subway", "tram"],
+    );
+
+    // Join game and verify the loaded subdivisions and transit lines in game state
+    const joinRes = await app.inject({
+      method: "POST",
+      url: "/api/game/join",
+      payload: { displayName: "Seeker 1", role: "SEEKER" },
+    });
+    const token = joinRes.json<{ token: string }>().token;
+
+    const stateRes = await app.inject({
+      method: "GET",
+      url: "/api/game/current",
+      headers: auth(token),
+    });
+    const state = stateRes.json<GameState>();
+
+    expect(state.game.subdivisions).not.toBeNull();
+    expect(state.game.subdivisions?.features).toHaveLength(1);
+    expect(state.game.subdivisions?.features[0]?.properties?.name).toBe("District 1");
+
+    expect(state.game.transitLines).not.toBeNull();
+    expect(state.game.transitLines?.features).toHaveLength(2);
+    expect(state.game.transitLines?.features[0]?.properties?.transitMode).toBe("subway");
+    expect(state.game.transitLines?.features[1]?.properties?.transitMode).toBe("tram");
+
+    expect(state.game.transitStations).not.toBeNull();
+    expect(state.game.transitStations?.features).toHaveLength(1);
+    expect(state.game.transitStations?.features[0]?.properties?.name).toBe("Karlsplatz");
+  });
+
+  it("skips administrative subdivisions auto-loading if firstDivisionAdminLevel is null or osmType is way", async () => {
+    const mockOsm = {
+      searchAreas: vi.fn(),
+      subdivisionLevels: vi.fn(),
+      subdivisions: vi.fn(),
+      transit: vi.fn().mockResolvedValue({
+        lines: turf.featureCollection([]),
+        stations: turf.featureCollection([]),
+      }),
+    } as unknown as OsmService;
+
+    const { app } = await fixture(undefined, {}, { osm: mockOsm });
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/games?syncOsm=true",
+      payload: {
+        name: "Null Division Test",
+        hidingDurationMinutes: 20,
+        hiderAssistance: true,
+        osm: {
+          osmType: "way",
+          osmId: "99999",
+          displayName: "Boundary Way",
+          boundingBox: [16.2, 48.1, 16.6, 48.35],
+        },
+        boundary,
+        firstDivisionAdminLevel: null,
+        transitModes: ["train"],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    expect(mockOsm.subdivisions).not.toHaveBeenCalled();
+    expect(mockOsm.transit).toHaveBeenCalled();
   });
 });

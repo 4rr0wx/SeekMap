@@ -13,6 +13,7 @@ import {
   datasetCategorySchema,
   joinGameSchema,
   markerInputSchema,
+  type TransitMode,
   updateQuestionSchema,
 } from "@hideseek/shared";
 import type { AppConfig } from "./config.js";
@@ -37,10 +38,15 @@ export interface BuiltApp {
   app: FastifyInstance;
   io: SocketServer;
   store: GameStore;
+  osm: OsmService;
   stopTimer: () => void;
 }
 
-export async function buildApp(config: AppConfig, database: DatabaseBundle): Promise<BuiltApp> {
+export async function buildApp(
+  config: AppConfig,
+  database: DatabaseBundle,
+  services?: { osm?: OsmService; store?: GameStore },
+): Promise<BuiltApp> {
   const app = Fastify({
     logger:
       process.env.NODE_ENV === "test"
@@ -64,13 +70,74 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
     limits: { files: 1, fileSize: config.maxUploadBytes, fields: 4, parts: 5 },
   });
 
-  const store = new GameStore(database);
-  const osm = new OsmService(database.db, config);
+  const store = services?.store ?? new GameStore(database);
+  const osm = services?.osm ?? new OsmService(database.db, config);
   const io = new SocketServer(app.server, {
     cors: { origin: true },
     transports: ["websocket", "polling"],
   });
   const broadcast = () => io.emit("state:changed", { at: new Date().toISOString() });
+
+  const autoLoadGameData = async (
+    gameId: string,
+    gameInput: {
+      osm: {
+        osmType: "relation" | "way";
+        osmId: string;
+        boundingBox: [number, number, number, number];
+      };
+      firstDivisionAdminLevel: number | null;
+      transitModes: TransitMode[];
+    },
+  ) => {
+    const tasks: Promise<unknown>[] = [];
+    if (
+      gameInput.firstDivisionAdminLevel !== null &&
+      gameInput.firstDivisionAdminLevel !== undefined &&
+      gameInput.osm.osmType === "relation"
+    ) {
+      tasks.push(
+        osm
+          .subdivisions(
+            gameInput.osm.osmType,
+            gameInput.osm.osmId,
+            gameInput.firstDivisionAdminLevel,
+          )
+          .then((subdivisions) => {
+            if (
+              store.saveSubdivisionsForGame(
+                gameId,
+                gameInput.firstDivisionAdminLevel!,
+                subdivisions,
+              )
+            ) {
+              broadcast();
+            }
+          })
+          .catch((err) => {
+            app.log.warn(
+              { err, gameId },
+              "Failed to auto-load administrative boundaries on game creation",
+            );
+          }),
+      );
+    }
+    if (gameInput.transitModes && gameInput.transitModes.length > 0) {
+      tasks.push(
+        osm
+          .transit(gameInput.osm.boundingBox, gameInput.transitModes)
+          .then((transit) => {
+            if (store.saveTransitForGame(gameId, transit)) {
+              broadcast();
+            }
+          })
+          .catch((err) => {
+            app.log.warn({ err, gameId }, "Failed to auto-load transit lines on game creation");
+          }),
+      );
+    }
+    await Promise.allSettled(tasks);
+  };
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof DomainError)
@@ -130,6 +197,12 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
     const input = createGameSchema.parse(request.body);
     const id = store.createGame(input);
     broadcast();
+    const syncOsm = (request.query as { syncOsm?: string } | undefined)?.syncOsm === "true";
+    if (syncOsm) {
+      await autoLoadGameData(id, input);
+    } else {
+      void autoLoadGameData(id, input);
+    }
     return reply.code(201).send({ id });
   });
   app.post("/api/game/join", async (request, reply) => {
@@ -351,5 +424,5 @@ export async function buildApp(config: AppConfig, database: DatabaseBundle): Pro
   }, 1_000);
   timer.unref();
 
-  return { app, io, store, stopTimer: () => clearInterval(timer) };
+  return { app, io, store, osm, stopTimer: () => clearInterval(timer) };
 }

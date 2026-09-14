@@ -862,14 +862,13 @@ export class GameStore {
       .run();
   }
 
-  saveSubdivisions(
-    token: string | undefined,
+  saveSubdivisionsForGame(
+    gameId: string,
     adminLevel: number,
     data: FeatureCollection<Polygon | MultiPolygon>,
-  ): void {
-    const player = this.requireSeeker(token);
+  ): boolean {
     const game = this.currentRow();
-    if (!game) throw new DomainError("No current game", 404);
+    if (!game || game.id !== gameId) return false;
     this.db
       .update(games)
       .set({
@@ -878,8 +877,42 @@ export class GameStore {
         revision: game.revision + 1,
         updatedAt: now(),
       })
-      .where(eq(games.id, player.gameId))
+      .where(eq(games.id, gameId))
       .run();
+    return true;
+  }
+
+  saveSubdivisions(
+    token: string | undefined,
+    adminLevel: number,
+    data: FeatureCollection<Polygon | MultiPolygon>,
+  ): void {
+    const player = this.requireSeeker(token);
+    const game = this.currentRow();
+    if (!game) throw new DomainError("No current game", 404);
+    this.saveSubdivisionsForGame(player.gameId, adminLevel, data);
+  }
+
+  saveTransitForGame(
+    gameId: string,
+    data: {
+      lines: FeatureCollection<LineString | MultiLineString>;
+      stations: FeatureCollection<Point>;
+    },
+  ): boolean {
+    const game = this.currentRow();
+    if (!game || game.id !== gameId) return false;
+    this.db
+      .update(games)
+      .set({
+        transitLinesGeojson: encode(data.lines),
+        transitStationsGeojson: encode(data.stations),
+        revision: game.revision + 1,
+        updatedAt: now(),
+      })
+      .where(eq(games.id, gameId))
+      .run();
+    return true;
   }
 
   saveTransit(
@@ -892,16 +925,7 @@ export class GameStore {
     const player = this.requireSeeker(token);
     const game = this.currentRow();
     if (!game) throw new DomainError("No current game", 404);
-    this.db
-      .update(games)
-      .set({
-        transitLinesGeojson: encode(data.lines),
-        transitStationsGeojson: encode(data.stations),
-        revision: game.revision + 1,
-        updatedAt: now(),
-      })
-      .where(eq(games.id, player.gameId))
-      .run();
+    this.saveTransitForGame(player.gameId, data);
   }
 
   addDataset(
