@@ -824,6 +824,9 @@ textarea:focus {
 .activity-sidebar .sheet-header {
   margin-bottom: 12px;
 }
+.activity-mobile-toggle {
+  display: none;
+}
 .activity-list {
   display: grid;
   gap: 12px;
@@ -1339,6 +1342,94 @@ textarea:focus {
   .result-actions,
   .boundary-item-actions {
     justify-content: flex-end;
+  }
+}
+
+@media (max-width: 1099px) {
+  .activity-sidebar {
+    top: auto;
+    bottom: max(84px, calc(env(safe-area-inset-bottom) + 76px));
+    max-height: 62dvh;
+    padding: 0;
+    overflow: hidden;
+    transition:
+      max-height 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .activity-sidebar.is-collapsed {
+    max-height: 76px;
+    box-shadow: 5px 5px 0 #050b0acc;
+  }
+  .activity-sidebar.is-expanded {
+    display: flex;
+    flex-direction: column;
+  }
+  .activity-sidebar .activity-desktop-header {
+    display: none;
+  }
+  .activity-mobile-toggle {
+    width: 100%;
+    min-height: 74px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 0;
+    background: #13201ef7;
+    color: var(--cream);
+    text-align: left;
+  }
+  .activity-mobile-toggle:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: -3px;
+  }
+  .activity-mobile-copy {
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .activity-mobile-copy .eyebrow {
+    margin: 0;
+    font-size: 0.58rem;
+  }
+  .activity-mobile-summary {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .activity-mobile-summary strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--cream);
+    font-size: 0.96rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .activity-mobile-chevron {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-small);
+    color: var(--gold);
+    background: #0d1816;
+  }
+  .activity-mobile-chevron svg {
+    width: 20px;
+    height: 20px;
+  }
+  .activity-sidebar .activity-list {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 14px 14px;
+  }
+  .activity-sidebar.is-collapsed .activity-list {
+    display: none;
   }
 }
 

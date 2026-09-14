@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock3,
   Eye,
   EyeOff,
@@ -431,6 +433,8 @@ export function QuestionActivitySidebar({
   onSelect,
 }: ActivityProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const primaryQuestion = questions[0]!;
 
   async function action(question: QuestionInstance, path: string, body: unknown = {}) {
     setBusyId(question.id);
@@ -448,18 +452,38 @@ export function QuestionActivitySidebar({
 
   return (
     <aside
-      className="question-sidebar sheet activity-sidebar"
-      aria-labelledby="active-question-title"
+      className={`question-sidebar sheet activity-sidebar ${mobileExpanded ? "is-expanded" : "is-collapsed"}`}
+      aria-label="Open question"
     >
-      <div className="sheet-header">
+      <div className="sheet-header activity-desktop-header">
         <div>
           <p className="eyebrow">Current workflow</p>
-          <h2 id="active-question-title">
-            {questions.length === 1 ? "Open question" : `${questions.length} open questions`}
-          </h2>
+          <h2>{questions.length === 1 ? "Open question" : `${questions.length} open questions`}</h2>
         </div>
       </div>
-      <div className="activity-list">
+      <button
+        type="button"
+        className="activity-mobile-toggle"
+        aria-expanded={mobileExpanded}
+        aria-controls="active-question-content"
+        onClick={() => setMobileExpanded((expanded) => !expanded)}
+      >
+        <span className="activity-mobile-copy">
+          <span className="eyebrow">
+            {questions.length === 1 ? "Current question" : `${questions.length} open questions`}
+          </span>
+          <span className="activity-mobile-summary">
+            <span className={`status ${primaryQuestion.status.toLowerCase()}`}>
+              {primaryQuestion.status}
+            </span>
+            <strong>{primaryQuestion.displayName}</strong>
+          </span>
+        </span>
+        <span className="activity-mobile-chevron" aria-hidden="true">
+          {mobileExpanded ? <ChevronDown /> : <ChevronUp />}
+        </span>
+      </button>
+      <div className="activity-list" id="active-question-content">
         {questions.map((question) => {
           const definition = getQuestionDefinition(question.definitionId);
           const dataset = question.parameters?.datasetId
