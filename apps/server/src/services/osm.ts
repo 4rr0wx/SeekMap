@@ -246,7 +246,8 @@ export class OsmService {
     const key = cacheKey(kind, query);
     if (cache) {
       const cached = this.getCached<any>(key);
-      if (cached) return cached;
+      if (cached && Array.isArray(cached.elements) && cached.elements.length > 0 && !cached.remark)
+        return cached;
     }
     return this.coalesce(key, async () => {
       const response = await this.fetchJson(
@@ -260,7 +261,7 @@ export class OsmService {
       );
       if (!Array.isArray(response.elements))
         throw new OsmRequestError("Overpass returned an invalid response", 502, false);
-      if (cache) this.setCached(key, kind, response);
+      if (cache && response.elements.length > 0) this.setCached(key, kind, response);
       return response;
     });
   }
@@ -337,14 +338,24 @@ export class OsmService {
     const areaId = 3_600_000_000 + Number(osmId);
     if (!Number.isSafeInteger(areaId)) throw new Error("Invalid OSM relation ID");
     const query = `[out:json][timeout:20];relation["boundary"="administrative"]["admin_level"="${adminLevel}"](area:${areaId});out geom;`;
-    const converted = osmtogeojson(await this.overpass(query, "subdivisions")) as FeatureCollection;
-    const features = converted.features.filter(
-      (feature): feature is Feature<Polygon | MultiPolygon> =>
-        feature.geometry?.type === "Polygon" || feature.geometry?.type === "MultiPolygon",
-    );
-    if (features.length === 0)
-      throw new Error(`No subdivisions found at admin level ${adminLevel}`);
-    return turf.featureCollection(features);
+    // Cache only successfully normalized polygons. Old empty/raw cache entries cannot poison retries.
+    const key = cacheKey("subdivisions-geojson-v2", query);
+    const cached = this.getCached<FeatureCollection<Polygon | MultiPolygon>>(key);
+    if (cached?.features.length) return cached;
+    return this.coalesce(key, async () => {
+      const converted = osmtogeojson(
+        await this.overpass(query, "subdivisions", false),
+      ) as FeatureCollection;
+      const features = converted.features.filter(
+        (feature): feature is Feature<Polygon | MultiPolygon> =>
+          feature.geometry?.type === "Polygon" || feature.geometry?.type === "MultiPolygon",
+      );
+      if (features.length === 0)
+        throw new Error(`No subdivisions found at admin level ${adminLevel}`);
+      const result = turf.featureCollection(features);
+      this.setCached(key, "subdivisions", result);
+      return result;
+    });
   }
 
   async subdivisionLevels(

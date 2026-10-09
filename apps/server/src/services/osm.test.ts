@@ -226,14 +226,27 @@ describe("OSM transit normalization", () => {
 });
 
 const quickPolicy = { attempts: 3, attemptTimeoutMs: 100, totalTimeoutMs: 1_000, retryDelayMs: 0 };
-const emptyOverpass = () => new Response(JSON.stringify({ elements: [] }));
+const validOverpass = () =>
+  new Response(
+    JSON.stringify({
+      elements: [
+        {
+          type: "node",
+          id: 1,
+          lat: 48.2,
+          lon: 16.3,
+          tags: { railway: "station", name: "Central" },
+        },
+      ],
+    }),
+  );
 
 describe("OSM request resilience", () => {
   it("retries a 504, shares concurrent requests and caches only the success", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("Busy", { status: 504 }))
-      .mockImplementation(emptyOverpass);
+      .mockImplementation(validOverpass);
     vi.stubGlobal("fetch", fetchMock);
     const database = openDatabase(":memory:");
     try {
@@ -271,7 +284,7 @@ describe("OSM request resilience", () => {
       expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
         count: 0,
       });
-      fetchMock.mockImplementation(emptyOverpass);
+      fetchMock.mockImplementation(validOverpass);
       await expect(service.transit([16, 48, 17, 49], ["train"])).resolves.toHaveProperty("lines");
     } finally {
       database.sqlite.close();
@@ -295,6 +308,47 @@ describe("OSM request resilience", () => {
       expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
         count: 0,
       });
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("does not poison subdivision retries with an empty response and caches normalized polygons", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ elements: [] })))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            elements: [
+              {
+                type: "way",
+                id: 1,
+                nodes: [1, 2, 3, 4, 1],
+                tags: { boundary: "administrative", area: "yes", name: "District" },
+                geometry: [
+                  { lon: 16, lat: 48 },
+                  { lon: 17, lat: 48 },
+                  { lon: 17, lat: 49 },
+                  { lon: 16, lat: 49 },
+                  { lon: 16, lat: 48 },
+                ],
+              },
+            ],
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      await expect(service.subdivisions("relation", "123", 10)).rejects.toThrow("No subdivisions");
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 0,
+      });
+      expect((await service.subdivisions("relation", "123", 10)).features).toHaveLength(1);
+      await service.subdivisions("relation", "123", 10);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       database.sqlite.close();
     }
