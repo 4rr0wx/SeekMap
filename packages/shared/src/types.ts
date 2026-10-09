@@ -41,7 +41,7 @@ export interface OSMSelection {
   boundingBox: [number, number, number, number];
 }
 
-export type OsmLayer = "subdivisions" | "transit";
+export type OsmLayer = "subdivisions" | "transit" | "pois";
 export interface OsmLayerStatus {
   status: "IDLE" | "LOADING" | "LOADED" | "ERROR";
   error: string | null;

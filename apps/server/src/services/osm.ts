@@ -61,8 +61,13 @@ export class OsmService {
     },
   ) {}
 
-  private async fetchJson(url: string, init: RequestInit, maxBytes: number): Promise<any> {
-    const deadline = Date.now() + this.policy.totalTimeoutMs;
+  private async fetchJson(
+    url: string,
+    init: RequestInit,
+    maxBytes: number,
+    outerDeadline = Infinity,
+  ): Promise<any> {
+    const deadline = Math.min(Date.now() + this.policy.totalTimeoutMs, outerDeadline);
     for (let attempt = 0; attempt < this.policy.attempts; attempt++) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new OsmRequestError("OpenStreetMap request timed out", 504);
@@ -242,7 +247,12 @@ export class OsmService {
     });
   }
 
-  private async overpass(query: string, kind: string, cache = true): Promise<any> {
+  private async overpass(
+    query: string,
+    kind: string,
+    cache = true,
+    deadline = Infinity,
+  ): Promise<any> {
     const key = cacheKey(kind, query);
     if (cache) {
       const cached = this.getCached<any>(key);
@@ -258,6 +268,7 @@ export class OsmService {
           body: new URLSearchParams({ data: query }).toString(),
         },
         30 * 1024 * 1024,
+        deadline,
       );
       if (!Array.isArray(response.elements))
         throw new OsmRequestError("Overpass returned an invalid response", 502, false);
@@ -271,59 +282,84 @@ export class OsmService {
     boundary: AreaFeature,
   ): Promise<MapFeatureCollection> {
     const [west, south, east, north] = boundingBox;
-    const bbox = `${south},${west},${north},${east}`;
-    const query = `[out:json][timeout:20];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["historic"](${bbox}););out center tags;`;
-    const response = await this.overpass(query, "game-pois", false);
+    if (![west, south, east, north].every(Number.isFinite) || west >= east || south >= north) {
+      throw new OsmRequestError("The game has an invalid geographic bounding box", 400, false);
+    }
+    const columns = Math.max(1, Math.ceil((east - west) / 0.25));
+    const rows = Math.max(1, Math.ceil((north - south) / 0.15));
+    if (columns * rows > 16) {
+      throw new OsmRequestError(
+        "The game area is too large for the OSM POI fallback; use a smaller area or a curated KML/KMZ file",
+        400,
+        false,
+      );
+    }
+    const deadline = Date.now() + 120_000;
     const features: Feature<Point>[] = [];
     const seen = new Set<string>();
-
-    for (const element of response.elements ?? []) {
-      const type = ["node", "way", "relation"].includes(element.type) ? element.type : "";
-      const id =
-        typeof element.id === "number" || typeof element.id === "string" ? String(element.id) : "";
-      const key = `${type}:${id}`;
-      const tags = element.tags ?? {};
-      const name = typeof tags.name === "string" ? tags.name.trim() : "";
-      const longitude = Number(type === "node" ? element.lon : element.center?.lon);
-      const latitude = Number(type === "node" ? element.lat : element.center?.lat);
-      if (
-        !name ||
-        !id ||
-        seen.has(key) ||
-        !Number.isFinite(longitude) ||
-        !Number.isFinite(latitude) ||
-        longitude < -180 ||
-        longitude > 180 ||
-        latitude < -90 ||
-        latitude > 90
-      ) {
-        continue;
+    // Sequential bounded cells avoid expensive region-wide queries and concurrent public-service load.
+    for (let row = 0; row < rows; row++) {
+      for (let column = 0; column < columns; column++) {
+        const cellWest = west + ((east - west) * column) / columns;
+        const cellEast = west + ((east - west) * (column + 1)) / columns;
+        const cellSouth = south + ((north - south) * row) / rows;
+        const cellNorth = south + ((north - south) * (row + 1)) / rows;
+        const bbox = `${cellSouth},${cellWest},${cellNorth},${cellEast}`;
+        const query = `[out:json][timeout:20];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["historic"](${bbox}););out center tags;`;
+        const response = await this.overpass(query, "game-pois", false, deadline);
+        for (const element of response.elements) {
+          const type = ["node", "way", "relation"].includes(element.type) ? element.type : "";
+          const id =
+            typeof element.id === "number" || typeof element.id === "string"
+              ? String(element.id)
+              : "";
+          const key = `${type}:${id}`;
+          const tags = element.tags ?? {};
+          const name = typeof tags.name === "string" ? tags.name.trim() : "";
+          const longitude = Number(type === "node" ? element.lon : element.center?.lon);
+          const latitude = Number(type === "node" ? element.lat : element.center?.lat);
+          if (
+            !name ||
+            !id ||
+            seen.has(key) ||
+            !Number.isFinite(longitude) ||
+            !Number.isFinite(latitude) ||
+            longitude < -180 ||
+            longitude > 180 ||
+            latitude < -90 ||
+            latitude > 90
+          ) {
+            continue;
+          }
+          const properties = Object.fromEntries(
+            Object.entries(tags)
+              .filter((entry): entry is [string, string | number | boolean] =>
+                ["string", "number", "boolean"].includes(typeof entry[1]),
+              )
+              .slice(0, 50),
+          );
+          const point = turf.point([longitude, latitude], {
+            ...properties,
+            name,
+            osmType: type,
+            osmId: id,
+          });
+          if (!turf.booleanPointInPolygon(point, boundary)) continue;
+          seen.add(key);
+          features.push(point);
+          if (features.length > 20_000) {
+            throw new OsmRequestError(
+              "The game area contains too many OpenStreetMap POIs; use a smaller area or a curated KML/KMZ file",
+              400,
+              false,
+            );
+          }
+        }
       }
-      const properties = Object.fromEntries(
-        Object.entries(tags)
-          .filter((entry): entry is [string, string | number | boolean] =>
-            ["string", "number", "boolean"].includes(typeof entry[1]),
-          )
-          .slice(0, 50),
-      );
-      const point = turf.point([longitude, latitude], {
-        ...properties,
-        name,
-        osmType: type,
-        osmId: id,
-      });
-      if (!turf.booleanPointInPolygon(point, boundary)) continue;
-      seen.add(key);
-      features.push(point);
     }
 
     if (features.length === 0) {
       throw new Error("OpenStreetMap returned no named points of interest inside the game area");
-    }
-    if (features.length > 20_000) {
-      throw new Error(
-        "The game area contains too many OpenStreetMap POIs; use a smaller area or a curated KML/KMZ file",
-      );
     }
     return turf.featureCollection(features);
   }

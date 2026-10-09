@@ -70,7 +70,7 @@ export class GameStore {
     this.adoptExistingDatasets();
     for (const game of this.db.select().from(games).all()) {
       const statuses = this.osmLoadState(game);
-      for (const layer of ["subdivisions", "transit"] as const) {
+      for (const layer of ["subdivisions", "transit", "pois"] as const) {
         if (statuses[layer].status === "LOADING") {
           this.setOsmLayerStatus(game.id, layer, "ERROR", "Loading was interrupted. Please retry.");
         }
@@ -332,6 +332,7 @@ export class GameStore {
   private osmLoadState(row: GameRow): OsmLoadState {
     const saved = decode<Partial<OsmLoadState>>(row.osmLoadStateJson) ?? {};
     return {
+      pois: saved.pois ?? { status: "IDLE", error: null },
       subdivisions: saved.subdivisions ?? {
         status: row.subdivisionsGeojson ? "LOADED" : "IDLE",
         error: null,
