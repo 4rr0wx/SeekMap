@@ -134,6 +134,15 @@ export interface ReusableDataset {
   updatedAt: string;
 }
 
+export const SEEKER_LOCATION_TTL_MS = 60_000;
+export interface SeekerLocation {
+  playerId: string;
+  displayName: string;
+  position: [number, number];
+  accuracyMeters: number | null;
+  updatedAt: string;
+}
+
 export interface SeekerMarker {
   id: string;
   createdByPlayerId: string;

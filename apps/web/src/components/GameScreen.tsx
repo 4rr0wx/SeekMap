@@ -27,7 +27,9 @@ import {
   type PublicConfig,
   type QuestionInstance,
   type SeekerMarker,
+  type SeekerLocation,
 } from "@hideseek/shared";
+import { useSeekerLocations } from "../useSeekerLocations";
 import { api, patch, post, remove } from "../api";
 import { GameMap, type MapLayers } from "./GameMap";
 import { MapLegendModal } from "./MapLegendModal";
@@ -96,8 +98,17 @@ export function GameScreen({
     transitStations: true,
     datasets: false,
     markers: true,
+    seekerLocations: true,
   });
   const [localPosition, setLocalPosition] = useState<[number, number] | null>(null);
+  const sharedLocations = useSeekerLocations(
+    state.me.role,
+    state.game.id,
+    state.game.phase,
+    token,
+    connected,
+    setLocalPosition,
+  );
   const [locationStatus, setLocationStatus] = useState<
     "idle" | "requesting" | "available" | "blocked"
   >("idle");
@@ -345,6 +356,7 @@ export function GameScreen({
           config={config}
           layers={layers}
           localPosition={localPosition}
+          seekerLocations={sharedLocations.locations}
           measurement={measurement}
           draftQuestionActive={composer.open}
           draftQuestionPoints={draftQuestionPoints}
@@ -558,6 +570,11 @@ export function GameScreen({
           state={state}
           busy={gameActionBusy}
           onClose={() => setPanel(null)}
+          sharing={sharedLocations.sharing}
+          stoppingSharing={sharedLocations.stopping}
+          sharingMessage={sharedLocations.message}
+          onSharingChange={sharedLocations.setSharing}
+          seekerLocations={sharedLocations.locations}
           onStart={(loadOsmPois) =>
             gameAction(loadOsmPois ? "/api/game/start?async=true" : "/api/game/start", "POST", {
               loadOsmPois,
@@ -643,6 +660,7 @@ function LayerPanel({
     transitStations: "Transit Stations",
     datasets: "Imported Datasets",
     markers: "Personal / Seeker Markers",
+    seekerLocations: "Shared Seeker Positions",
   };
   return (
     <div className="modal-backdrop align-end">
@@ -985,7 +1003,17 @@ function GamePanel({
   onEnd,
   onReset,
   onLeaveDevice,
+  sharing,
+  stoppingSharing,
+  sharingMessage,
+  onSharingChange,
+  seekerLocations,
 }: {
+  sharing: boolean;
+  stoppingSharing: boolean;
+  sharingMessage: string | null;
+  onSharingChange: (enabled: boolean) => void;
+  seekerLocations: SeekerLocation[];
   state: GameState;
   busy: boolean;
   onClose: () => void;
@@ -1024,6 +1052,37 @@ function GamePanel({
             </div>
           ))}
         </div>
+        {state.game.phase !== "ENDED" && (
+          <div className="data-section" aria-live="polite">
+            <h3>Shared Seeker positions</h3>
+            {state.me.role === "SEEKER" && (
+              <label className="switch-row">
+                <input
+                  type="checkbox"
+                  checked={sharing}
+                  disabled={stoppingSharing}
+                  onChange={(event) => onSharingChange(event.target.checked)}
+                />
+                Share my location with all players
+              </label>
+            )}
+            <p>
+              {state.me.role === "SEEKER"
+                ? "Sharing is optional. Positions disappear after 60 seconds without an update."
+                : "You can see Seekers who enable sharing. Your Hider GPS stays on this device."}
+            </p>
+            {sharingMessage && state.me.role === "SEEKER" && <p>{sharingMessage}</p>}
+            {seekerLocations.map((location) => (
+              <p key={location.playerId}>
+                <strong>{location.displayName}</strong> · updated{" "}
+                {new Date(location.updatedAt).toLocaleTimeString()}
+              </p>
+            ))}
+            {seekerLocations.length === 0 && (
+              <p className="muted">No current Seeker positions shared.</p>
+            )}
+          </div>
+        )}
         {state.me.role === "SEEKER" && state.game.phase === "LOBBY" && (
           <>
             <button

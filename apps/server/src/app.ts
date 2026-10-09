@@ -14,6 +14,7 @@ import {
   joinGameSchema,
   markerInputSchema,
   startGameSchema,
+  seekerLocationSchema,
   type TransitMode,
   type OsmLayer,
   updateQuestionSchema,
@@ -456,6 +457,22 @@ export async function buildApp(
     return { ok: true };
   });
 
+  app.get("/api/game/seeker-locations", async (request) => ({
+    locations: store.getSeekerLocations(bearer(request)),
+    serverNow: new Date().toISOString(),
+  }));
+  app.put("/api/game/seeker-location", async (request) => {
+    const token = bearer(request);
+    // Check the role before parsing any coordinate payload. Hider devices cannot publish GPS.
+    store.requireSeeker(token);
+    store.updateSeekerLocation(token, seekerLocationSchema.parse(request.body));
+    return { ok: true };
+  });
+  app.delete("/api/game/seeker-location", async (request) => {
+    store.clearSeekerLocation(bearer(request));
+    return { ok: true };
+  });
+
   app.post("/api/markers", async (request, reply) => {
     const input = markerInputSchema.parse(request.body);
     const id = store.addMarker(bearer(request), input);
@@ -508,6 +525,7 @@ export async function buildApp(
   }
 
   const timer = setInterval(() => {
+    store.expireSeekerLocations();
     if (store.transitionTimer()) broadcast();
   }, 1_000);
   timer.unref();

@@ -271,12 +271,10 @@ describe("server game integrity", () => {
     let fail!: (error: Error) => void;
     const mockOsm = {
       subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([boundary])),
-      transit: vi
-        .fn()
-        .mockResolvedValue({
-          lines: turf.featureCollection([]),
-          stations: turf.featureCollection([]),
-        }),
+      transit: vi.fn().mockResolvedValue({
+        lines: turf.featureCollection([]),
+        stations: turf.featureCollection([]),
+      }),
       pointsOfInterest: vi.fn(
         () =>
           new Promise((resolve, reject) => {
@@ -315,12 +313,10 @@ describe("server game integrity", () => {
     let finish!: (value: ReturnType<typeof turf.featureCollection>) => void;
     const mockOsm = {
       subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([boundary])),
-      transit: vi
-        .fn()
-        .mockResolvedValue({
-          lines: turf.featureCollection([]),
-          stations: turf.featureCollection([]),
-        }),
+      transit: vi.fn().mockResolvedValue({
+        lines: turf.featureCollection([]),
+        stations: turf.featureCollection([]),
+      }),
       pointsOfInterest: vi.fn(
         () =>
           new Promise((resolve) => {
@@ -1354,5 +1350,148 @@ describe("server game integrity", () => {
     expect(createRes.statusCode).toBe(201);
     expect(mockOsm.subdivisions).not.toHaveBeenCalled();
     expect(mockOsm.transit).toHaveBeenCalled();
+  });
+});
+
+describe("Seeker location sharing", () => {
+  async function locationFixture() {
+    const osm = {
+      subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([boundary])),
+      transit: vi.fn().mockResolvedValue({
+        lines: turf.featureCollection([]),
+        stations: turf.featureCollection([]),
+      }),
+    } as unknown as OsmService;
+    const built = await fixture(undefined, {}, { osm });
+    const identities = await createAndJoin(built.app);
+    return { ...built, ...identities };
+  }
+
+  it("shows multiple Seekers to a Hider without exposing investigation markers or persisting coordinates", async () => {
+    const { app, seeker, hider, store, database } = await locationFixture();
+    const second = (
+      await app.inject({
+        method: "POST",
+        url: "/api/game/join",
+        payload: { displayName: "Seeker Two", role: "SEEKER" },
+      })
+    ).json<{ token: string; playerId: string }>();
+    for (const [identity, position] of [
+      [seeker, [16.3, 48.2]],
+      [second, [16.4, 48.21]],
+    ] as const) {
+      expect(
+        (
+          await app.inject({
+            method: "PUT",
+            url: "/api/game/seeker-location",
+            headers: auth(identity.token),
+            payload: { position, accuracyMeters: 8 },
+          })
+        ).statusCode,
+      ).toBe(200);
+    }
+    store.addMarker(seeker.token, {
+      position: turf.point([16.35, 48.2]),
+      title: "Private investigation",
+      note: null,
+    });
+    const shared = await app.inject({
+      method: "GET",
+      url: "/api/game/seeker-locations",
+      headers: auth(hider.token),
+    });
+    expect(shared.json().locations).toHaveLength(2);
+    expect(shared.json().locations.map((item: { playerId: string }) => item.playerId)).toEqual([
+      seeker.playerId,
+      second.playerId,
+    ]);
+    expect(shared.headers["cache-control"]).toContain("no-store");
+    expect(store.getState(hider.token)).not.toHaveProperty("seekerMarkers");
+    const playerColumns = database.sqlite.pragma("table_info(players)") as Array<{ name: string }>;
+    expect(playerColumns.map((item) => item.name)).not.toContain("position");
+    const reopened = new GameStore(database);
+    expect(reopened.getSeekerLocations(hider.token)).toEqual([]);
+    expect(store.getState(hider.token).game.boundary).toEqual(boundary);
+  });
+
+  it("rejects Hider publications, missing sessions and invalid or extra fields", async () => {
+    const { app, seeker, hider } = await locationFixture();
+    for (const method of ["PUT", "DELETE"] as const) {
+      expect(
+        (
+          await app.inject({
+            method,
+            url: "/api/game/seeker-location",
+            headers: auth(hider.token),
+            ...(method === "PUT" ? { payload: { position: [16.3, 48.2] } } : {}),
+          })
+        ).statusCode,
+      ).toBe(403);
+    }
+    expect(
+      (await app.inject({ method: "GET", url: "/api/game/seeker-locations" })).statusCode,
+    ).toBe(401);
+    for (const payload of [
+      { position: [181, 48] },
+      { position: [16, 91] },
+      { position: [16, 48], hiderPosition: [16.1, 48.1] },
+      { position: [16, 48], accuracyMeters: -1 },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: "PUT",
+            url: "/api/game/seeker-location",
+            headers: auth(seeker.token),
+            payload,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/game/seeker-locations",
+          headers: auth(hider.token),
+        })
+      ).json().locations,
+    ).toEqual([]);
+  });
+
+  it("limits updates, clears only the publishing Seeker and expires positions after 60 seconds", async () => {
+    const { app, seeker, hider, store } = await locationFixture();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-09T12:00:00Z"));
+      const second = store.join("Seeker Two", "SEEKER");
+      const publish = () =>
+        app.inject({
+          method: "PUT",
+          url: "/api/game/seeker-location",
+          headers: auth(seeker.token),
+          payload: { position: [16.3, 48.2] },
+        });
+      expect((await publish()).statusCode).toBe(200);
+      expect((await publish()).statusCode).toBe(429);
+      store.updateSeekerLocation(second.token, { position: [16.4, 48.2] });
+      await app.inject({
+        method: "DELETE",
+        url: "/api/game/seeker-location",
+        headers: auth(seeker.token),
+      });
+      expect(store.getSeekerLocations(hider.token).map((item) => item.playerId)).toEqual([
+        second.playerId,
+      ]);
+      vi.setSystemTime(new Date("2026-10-09T12:01:00Z"));
+      expect(store.getSeekerLocations(hider.token)).toEqual([]);
+      expect((await publish()).statusCode).toBe(200);
+      store.endGame(seeker.token);
+      expect(store.getSeekerLocations(hider.token)).toEqual([]);
+      expect((await publish()).statusCode).toBe(409);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -22,6 +22,8 @@ import {
   type QuestionInstance,
   type ReusableDataset,
   type SeekerMarker,
+  type SeekerLocation,
+  SEEKER_LOCATION_TTL_MS,
   type TransitMode,
   type UploadedDataset,
 } from "@hideseek/shared";
@@ -63,6 +65,7 @@ type PlayerRow = typeof players.$inferSelect;
 
 export class GameStore {
   private readonly db: DatabaseBundle["db"];
+  private readonly seekerLocations = new Map<string, SeekerLocation & { gameId: string }>();
 
   constructor(private readonly bundle: DatabaseBundle) {
     this.db = bundle.db;
@@ -327,6 +330,65 @@ export class GameStore {
     if (player.role !== "SEEKER")
       throw new DomainError("This action is available to Seekers only", 403);
     return player;
+  }
+
+  updateSeekerLocation(
+    token: string | undefined,
+    input: { position: [number, number]; accuracyMeters?: number | undefined },
+  ): void {
+    const player = this.requireSeeker(token);
+    const game = this.currentRow();
+    if (!game || game.phase === "ENDED")
+      throw new DomainError("Location sharing is only available in an active game", 409);
+    const previous = this.seekerLocations.get(player.id);
+    if (previous && Date.now() - Date.parse(previous.updatedAt) < 5_000) {
+      throw new DomainError("Please wait before updating your shared location again", 429);
+    }
+    this.seekerLocations.set(player.id, {
+      gameId: player.gameId,
+      playerId: player.id,
+      displayName: player.displayName,
+      position: input.position,
+      accuracyMeters: input.accuracyMeters ?? null,
+      updatedAt: now(),
+    });
+  }
+
+  clearSeekerLocation(token: string | undefined): void {
+    const player = this.requireSeeker(token);
+    this.seekerLocations.delete(player.id);
+  }
+
+  expireSeekerLocations(): void {
+    for (const [id, location] of this.seekerLocations) {
+      if (Date.now() - Date.parse(location.updatedAt) >= SEEKER_LOCATION_TTL_MS)
+        this.seekerLocations.delete(id);
+    }
+  }
+
+  getSeekerLocations(token: string | undefined): SeekerLocation[] {
+    const player = this.authenticate(token);
+    const game = this.currentRow();
+    if (!game || game.phase === "ENDED") return [];
+    this.expireSeekerLocations();
+    const result: SeekerLocation[] = [];
+    for (const [id, location] of this.seekerLocations) {
+      if (
+        location.gameId !== player.gameId ||
+        Date.now() - Date.parse(location.updatedAt) >= SEEKER_LOCATION_TTL_MS
+      ) {
+        this.seekerLocations.delete(id);
+        continue;
+      }
+      result.push({
+        playerId: location.playerId,
+        displayName: location.displayName,
+        position: location.position,
+        accuracyMeters: location.accuracyMeters,
+        updatedAt: location.updatedAt,
+      });
+    }
+    return result;
   }
 
   private osmLoadState(row: GameRow): OsmLoadState {
@@ -613,6 +675,7 @@ export class GameStore {
     if (!game || game.id !== player.gameId) throw new DomainError("No current game", 404);
     if (game.phase === "ENDED") return;
     const timestamp = now();
+    this.seekerLocations.clear();
     this.db.transaction((tx) => {
       tx.delete(datasets)
         .where(and(eq(datasets.gameId, game.id), eq(datasets.temporary, true)))
@@ -635,6 +698,7 @@ export class GameStore {
     const game = this.currentRow();
     if (!game || (game.lifecycle !== "ENDED" && game.phase !== "LOBBY"))
       throw new DomainError("Only a lobby setup or ended game can be cleared", 409);
+    this.seekerLocations.clear();
     this.db.delete(games).where(eq(games.id, game.id)).run();
   }
 
