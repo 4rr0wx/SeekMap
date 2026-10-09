@@ -30,35 +30,140 @@ function jsonText<T>(value: T): string {
   return JSON.stringify(value);
 }
 
+export class OsmRequestError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode = 503,
+    readonly retryable = true,
+  ) {
+    super(message);
+  }
+}
+
+interface RequestPolicy {
+  attempts: number;
+  attemptTimeoutMs: number;
+  totalTimeoutMs: number;
+  retryDelayMs: number;
+}
+
 export class OsmService {
+  private readonly pending = new Map<string, Promise<any>>();
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
+    private readonly policy: RequestPolicy = {
+      attempts: 3,
+      attemptTimeoutMs: 25_000,
+      totalTimeoutMs: 60_000,
+      retryDelayMs: 1_000,
+    },
   ) {}
 
   private async fetchJson(url: string, init: RequestInit, maxBytes: number): Promise<any> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 65_000);
+    const deadline = Date.now() + this.policy.totalTimeoutMs;
+    for (let attempt = 0; attempt < this.policy.attempts; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new OsmRequestError("OpenStreetMap request timed out", 504);
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        Math.min(remaining, this.policy.attemptTimeoutMs),
+      );
+      let retryAfter = this.policy.retryDelayMs * 2 ** attempt;
+      try {
+        const response = await fetch(url, {
+          ...init,
+          signal: controller.signal,
+          headers: {
+            "User-Agent": `HideSeek Atlas/0.1 (${this.config.publicUrl ?? "self-hosted"})`,
+            Accept: "application/json",
+            ...init.headers,
+          },
+        });
+        if (!response.ok) {
+          const header = response.headers.get("Retry-After");
+          if (header) {
+            const seconds = Number(header);
+            const delay = Number.isFinite(seconds)
+              ? seconds * 1_000
+              : Date.parse(header) - Date.now();
+            if (Number.isFinite(delay)) retryAfter = Math.max(retryAfter, delay);
+          }
+          await response.body?.cancel();
+          throw new OsmRequestError(
+            `OpenStreetMap service returned ${response.status}`,
+            503,
+            [429, 500, 502, 503, 504].includes(response.status),
+          );
+        }
+        const reader = response.body?.getReader();
+        if (!reader)
+          throw new OsmRequestError("OpenStreetMap returned an empty response", 502, false);
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > maxBytes) {
+              await reader.cancel();
+              throw new OsmRequestError("OpenStreetMap response was too large", 502, false);
+            }
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = Buffer.concat(chunks);
+        let parsed: any;
+        try {
+          parsed = JSON.parse(bytes.toString("utf8"));
+        } catch {
+          throw new OsmRequestError("OpenStreetMap returned invalid JSON", 502, false);
+        }
+        if (!parsed || typeof parsed !== "object") {
+          throw new OsmRequestError("OpenStreetMap returned an invalid response", 502, false);
+        }
+        if (typeof parsed.remark === "string" && parsed.remark.trim()) {
+          throw new OsmRequestError("Overpass could not complete the query. Please try again.");
+        }
+        return parsed;
+      } catch (cause) {
+        const error =
+          cause instanceof OsmRequestError
+            ? cause
+            : new OsmRequestError(
+                controller.signal.aborted
+                  ? "OpenStreetMap request timed out"
+                  : "OpenStreetMap service is unavailable",
+                controller.signal.aborted ? 504 : 503,
+              );
+        if (
+          !error.retryable ||
+          attempt + 1 >= this.policy.attempts ||
+          retryAfter >= deadline - Date.now()
+        )
+          throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryAfter));
+    }
+    throw new OsmRequestError("OpenStreetMap service is unavailable");
+  }
+
+  private async coalesce<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const existing = this.pending.get(key);
+    if (existing) return existing;
+    const request = Promise.resolve().then(work);
+    this.pending.set(key, request);
     try {
-      const response = await fetch(url, {
-        ...init,
-        signal: controller.signal,
-        headers: {
-          "User-Agent": `HideSeek Atlas/0.1 (${this.config.publicUrl ?? "self-hosted"})`,
-          Accept: "application/json",
-          ...init.headers,
-        },
-      });
-      if (!response.ok) throw new Error(`OpenStreetMap service returned ${response.status}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > maxBytes) throw new Error("OpenStreetMap response was too large");
-      return JSON.parse(new TextDecoder().decode(bytes));
-    } catch (error) {
-      if ((error as Error).name === "AbortError")
-        throw new Error("OpenStreetMap request timed out");
-      throw error;
+      return await request;
     } finally {
-      clearTimeout(timeout);
+      this.pending.delete(key);
     }
   }
 
@@ -87,50 +192,54 @@ export class OsmService {
     const cached = this.getCached<SearchAreaResult[]>(key);
     if (cached) return cached;
 
-    const url = new URL(`${this.config.nominatimUrl}/search`);
-    url.searchParams.set("q", normalized);
-    url.searchParams.set("format", "geojson");
-    url.searchParams.set("polygon_geojson", "1");
-    url.searchParams.set("addressdetails", "1");
-    url.searchParams.set("extratags", "1");
-    url.searchParams.set("limit", "8");
-    const result = await this.fetchJson(url.toString(), { method: "GET" }, 12 * 1024 * 1024);
-    const candidates = (result.features ?? [])
-      .map((feature: any): SearchAreaResult | null => {
-        if (!feature.geometry || !["Polygon", "MultiPolygon"].includes(feature.geometry.type))
-          return null;
-        const parsed = areaFeatureSchema.safeParse({
-          type: "Feature",
-          geometry: feature.geometry,
-          properties: feature.properties ?? {},
-        });
-        if (!parsed.success) return null;
-        const properties = feature.properties ?? {};
-        const rawBox = properties.boundingbox;
-        const fallback = turf.bbox(parsed.data);
-        const boundingBox: [number, number, number, number] =
-          Array.isArray(rawBox) && rawBox.length === 4
-            ? [Number(rawBox[2]), Number(rawBox[0]), Number(rawBox[3]), Number(rawBox[1])]
-            : [fallback[0], fallback[1], fallback[2], fallback[3]];
-        const osmType = properties.osm_type === "way" ? "way" : "relation";
-        const adminLevel = Number.parseInt(
-          properties.extratags?.admin_level ?? properties.admin_level ?? "",
-          10,
-        );
-        return {
-          osm: {
-            osmType,
-            osmId: String(properties.osm_id),
-            displayName: String(properties.display_name ?? properties.name ?? normalized),
-            boundingBox,
-          },
-          boundary: normalizeArea(parsed.data),
-          adminLevel: Number.isFinite(adminLevel) ? adminLevel : null,
-        };
-      })
-      .filter((item: SearchAreaResult | null): item is SearchAreaResult => item !== null);
-    this.setCached(key, "nominatim", candidates);
-    return candidates;
+    return this.coalesce(key, async () => {
+      const url = new URL(`${this.config.nominatimUrl}/search`);
+      url.searchParams.set("q", normalized);
+      url.searchParams.set("format", "geojson");
+      url.searchParams.set("polygon_geojson", "1");
+      url.searchParams.set("addressdetails", "1");
+      url.searchParams.set("extratags", "1");
+      url.searchParams.set("limit", "8");
+      const result = await this.fetchJson(url.toString(), { method: "GET" }, 12 * 1024 * 1024);
+      if (!Array.isArray(result.features))
+        throw new OsmRequestError("Nominatim returned an invalid response", 502, false);
+      const candidates = result.features
+        .map((feature: any): SearchAreaResult | null => {
+          if (!feature.geometry || !["Polygon", "MultiPolygon"].includes(feature.geometry.type))
+            return null;
+          const parsed = areaFeatureSchema.safeParse({
+            type: "Feature",
+            geometry: feature.geometry,
+            properties: feature.properties ?? {},
+          });
+          if (!parsed.success) return null;
+          const properties = feature.properties ?? {};
+          const rawBox = properties.boundingbox;
+          const fallback = turf.bbox(parsed.data);
+          const boundingBox: [number, number, number, number] =
+            Array.isArray(rawBox) && rawBox.length === 4
+              ? [Number(rawBox[2]), Number(rawBox[0]), Number(rawBox[3]), Number(rawBox[1])]
+              : [fallback[0], fallback[1], fallback[2], fallback[3]];
+          const osmType = properties.osm_type === "way" ? "way" : "relation";
+          const adminLevel = Number.parseInt(
+            properties.extratags?.admin_level ?? properties.admin_level ?? "",
+            10,
+          );
+          return {
+            osm: {
+              osmType,
+              osmId: String(properties.osm_id),
+              displayName: String(properties.display_name ?? properties.name ?? normalized),
+              boundingBox,
+            },
+            boundary: normalizeArea(parsed.data),
+            adminLevel: Number.isFinite(adminLevel) ? adminLevel : null,
+          };
+        })
+        .filter((item: SearchAreaResult | null): item is SearchAreaResult => item !== null);
+      this.setCached(key, "nominatim", candidates);
+      return candidates;
+    });
   }
 
   private async overpass(query: string, kind: string, cache = true): Promise<any> {
@@ -139,17 +248,21 @@ export class OsmService {
       const cached = this.getCached<any>(key);
       if (cached) return cached;
     }
-    const response = await this.fetchJson(
-      this.config.overpassUrl,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body: new URLSearchParams({ data: query }).toString(),
-      },
-      30 * 1024 * 1024,
-    );
-    if (cache) this.setCached(key, kind, response);
-    return response;
+    return this.coalesce(key, async () => {
+      const response = await this.fetchJson(
+        this.config.overpassUrl,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: new URLSearchParams({ data: query }).toString(),
+        },
+        30 * 1024 * 1024,
+      );
+      if (!Array.isArray(response.elements))
+        throw new OsmRequestError("Overpass returned an invalid response", 502, false);
+      if (cache) this.setCached(key, kind, response);
+      return response;
+    });
   }
 
   async pointsOfInterest(
@@ -158,7 +271,7 @@ export class OsmService {
   ): Promise<MapFeatureCollection> {
     const [west, south, east, north] = boundingBox;
     const bbox = `${south},${west},${north},${east}`;
-    const query = `[out:json][timeout:60];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["historic"](${bbox}););out center tags;`;
+    const query = `[out:json][timeout:20];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["historic"](${bbox}););out center tags;`;
     const response = await this.overpass(query, "game-pois", false);
     const features: Feature<Point>[] = [];
     const seen = new Set<string>();
@@ -223,7 +336,7 @@ export class OsmService {
       throw new Error("Automatic subdivisions require an OSM relation boundary");
     const areaId = 3_600_000_000 + Number(osmId);
     if (!Number.isSafeInteger(areaId)) throw new Error("Invalid OSM relation ID");
-    const query = `[out:json][timeout:60];relation["boundary"="administrative"]["admin_level"="${adminLevel}"](area:${areaId});out geom;`;
+    const query = `[out:json][timeout:20];relation["boundary"="administrative"]["admin_level"="${adminLevel}"](area:${areaId});out geom;`;
     const converted = osmtogeojson(await this.overpass(query, "subdivisions")) as FeatureCollection;
     const features = converted.features.filter(
       (feature): feature is Feature<Polygon | MultiPolygon> =>
@@ -242,7 +355,7 @@ export class OsmService {
     if (osmType !== "relation") return [];
     const areaId = 3_600_000_000 + Number(osmId);
     if (!Number.isSafeInteger(areaId)) throw new Error("Invalid OSM relation ID");
-    const query = `[out:json][timeout:30];relation["boundary"="administrative"]["admin_level"](area:${areaId});out tags;`;
+    const query = `[out:json][timeout:20];relation["boundary"="administrative"]["admin_level"](area:${areaId});out tags;`;
     const response = await this.overpass(query, "subdivision-levels");
     const levels = new Map<number, { count: number; examples: Set<string> }>();
     for (const element of response.elements ?? []) {
@@ -280,7 +393,7 @@ export class OsmService {
     const [west, south, east, north] = boundingBox;
     const bbox = `${south},${west},${north},${east}`;
     const railwayPattern = modes.map((mode) => (mode === "train" ? "rail" : mode)).join("|");
-    const query = `[out:json][timeout:60];(way["railway"~"^(${railwayPattern})$"](${bbox});nwr["railway"~"^(station|halt|tram_stop)$"](${bbox}););out geom;`;
+    const query = `[out:json][timeout:20];(way["railway"~"^(${railwayPattern})$"](${bbox});nwr["railway"~"^(station|halt|tram_stop)$"](${bbox}););out geom;`;
     const converted = osmtogeojson(await this.overpass(query, "transit")) as FeatureCollection;
     const lines: Feature<LineString | MultiLineString>[] = [];
     const stations: Feature<Point>[] = [];

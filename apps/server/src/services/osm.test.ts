@@ -224,3 +224,119 @@ describe("OSM transit normalization", () => {
     }
   });
 });
+
+const quickPolicy = { attempts: 3, attemptTimeoutMs: 100, totalTimeoutMs: 1_000, retryDelayMs: 0 };
+const emptyOverpass = () => new Response(JSON.stringify({ elements: [] }));
+
+describe("OSM request resilience", () => {
+  it("retries a 504, shares concurrent requests and caches only the success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Busy", { status: 504 }))
+      .mockImplementation(emptyOverpass);
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      await Promise.all([
+        service.transit([16, 48, 17, 49], ["train"]),
+        service.transit([16, 48, 17, 49], ["train"]),
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await service.transit([16, 48, 17, 49], ["train"]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("does not cache partial Overpass responses and allows a later retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(
+        async () =>
+          new Response(JSON.stringify({ elements: [], remark: "runtime error: Query timed out" })),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow(
+        "could not complete",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 0,
+      });
+      fetchMock.mockImplementation(emptyOverpass);
+      await expect(service.transit([16, 48, 17, 49], ["train"])).resolves.toHaveProperty("lines");
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("does not retry permanent errors or cache malformed data", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Forbidden", { status: 403 }))
+      .mockResolvedValueOnce(new Response("not json"))
+      .mockResolvedValueOnce(new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      for (const message of ["returned 403", "invalid JSON", "invalid response"]) {
+        await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow(message);
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("respects Retry-After without waiting past the total request budget", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("Busy", { status: 429, headers: { "Retry-After": "120" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow("429");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("aborts timed-out attempts and stops after the bounded retry count", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), {
+        ...quickPolicy,
+        attemptTimeoutMs: 5,
+      });
+      await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow("timed out");
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+});
