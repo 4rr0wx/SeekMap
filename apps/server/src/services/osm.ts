@@ -66,8 +66,10 @@ export class OsmService {
     init: RequestInit,
     maxBytes: number,
     outerDeadline = Infinity,
+    fallbackUrls: string[] = [],
   ): Promise<any> {
     const deadline = Math.min(Date.now() + this.policy.totalTimeoutMs, outerDeadline);
+    const endpoints = [url, ...fallbackUrls];
     for (let attempt = 0; attempt < this.policy.attempts; attempt++) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new OsmRequestError("OpenStreetMap request timed out", 504);
@@ -78,7 +80,7 @@ export class OsmService {
       );
       let retryAfter = this.policy.retryDelayMs * 2 ** attempt;
       try {
-        const response = await fetch(url, {
+        const response = await fetch(endpoints[attempt % endpoints.length]!, {
           ...init,
           signal: controller.signal,
           headers: {
@@ -269,6 +271,7 @@ export class OsmService {
         },
         30 * 1024 * 1024,
         deadline,
+        this.config.overpassFallbackUrls,
       );
       if (!Array.isArray(response.elements))
         throw new OsmRequestError("Overpass returned an invalid response", 502, false);

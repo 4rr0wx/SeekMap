@@ -496,3 +496,29 @@ describe("bounded POI import", () => {
     }
   });
 });
+
+it("uses explicitly configured fallback endpoints within the retry budget", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response("Busy", { status: 504 }))
+    .mockImplementation(validOverpass);
+  vi.stubGlobal("fetch", fetchMock);
+  const database = openDatabase(":memory:");
+  try {
+    const service = new OsmService(
+      database.db,
+      loadConfig({
+        OVERPASS_URL: "https://primary.example/api/interpreter",
+        OVERPASS_FALLBACK_URLS: "https://fallback.example/api/interpreter",
+      }),
+      quickPolicy,
+    );
+    await service.transit([16, 48, 17, 49], ["train"]);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://primary.example/api/interpreter",
+      "https://fallback.example/api/interpreter",
+    ]);
+  } finally {
+    database.sqlite.close();
+  }
+});

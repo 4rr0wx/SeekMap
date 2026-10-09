@@ -13,6 +13,7 @@ export interface AppConfig {
   databasePath: string;
   nominatimUrl: string;
   overpassUrl: string;
+  overpassFallbackUrls: string[];
   tileUrl: string;
   tileAttribution: string;
   maxUploadBytes: number;
@@ -35,6 +36,10 @@ export function loadConfig(environment = process.env): AppConfig {
       /\/$/,
       "",
     ),
+    overpassFallbackUrls: (environment.OVERPASS_FALLBACK_URLS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
     tileUrl: environment.OSM_TILE_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     tileAttribution:
       environment.OSM_TILE_ATTRIBUTION ??

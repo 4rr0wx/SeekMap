@@ -11,6 +11,7 @@ services:
       DATA_DIR: /data
       NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org}
       OVERPASS_URL: ${OVERPASS_URL:-https://overpass-api.de/api/interpreter}
+      OVERPASS_FALLBACK_URLS: ${OVERPASS_FALLBACK_URLS:-}
       OSM_TILE_URL: ${OSM_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
       OSM_TILE_ATTRIBUTION: ${OSM_TILE_ATTRIBUTION:-&copy; OpenStreetMap contributors}
       MAX_KML_BYTES: ${MAX_KML_BYTES:-5242880}
