@@ -9,6 +9,7 @@ import {
   type MapFeature,
   type MapFeatureCollection,
   type PublicConfig,
+  type SeekerLocation,
 } from "@hideseek/shared";
 import {
   createGameAreaLayers,
@@ -26,6 +27,7 @@ export interface MapLayers {
   transitStations: boolean;
   datasets: boolean;
   markers: boolean;
+  seekerLocations: boolean;
 }
 
 interface Props {
@@ -33,6 +35,7 @@ interface Props {
   config: PublicConfig;
   layers: MapLayers;
   localPosition: [number, number] | null;
+  seekerLocations: SeekerLocation[];
   measurement: [number, number][];
   draftQuestionActive: boolean;
   draftQuestionPoints: Partial<Record<"A" | "B", [number, number]>>;
@@ -78,6 +81,7 @@ export function GameMap({
   config,
   layers,
   localPosition,
+  seekerLocations,
   measurement,
   draftQuestionActive,
   draftQuestionPoints,
@@ -519,6 +523,30 @@ export function GameMap({
       mapRef.current = null;
     };
   }, [config.tileAttribution, config.tileUrl, state.game.id]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !layers.seekerLocations) return;
+    const markers = seekerLocations.map((location) => {
+      const element = document.createElement("div");
+      element.className = "seeker-location-marker";
+      element.setAttribute("role", "img");
+      element.setAttribute("aria-label", `${location.displayName}, shared Seeker position`);
+      element.title = `${location.displayName} · updated ${new Date(location.updatedAt).toLocaleTimeString()}`;
+      const dot = document.createElement("span");
+      dot.className = "seeker-location-dot";
+      const label = document.createElement("span");
+      label.className = "seeker-location-name";
+      label.textContent = location.displayName;
+      element.append(dot, label);
+      return new maplibregl.Marker({ element, anchor: "top", offset: [0, -8] })
+        .setLngLat(location.position)
+        .addTo(map);
+    });
+    return () => {
+      for (const marker of markers) marker.remove();
+    };
+  }, [mapLoaded, state.game.id, seekerLocations, layers.seekerLocations]);
 
   syncDataRef.current = () => {
     const map = mapRef.current;

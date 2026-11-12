@@ -17,6 +17,13 @@ export const positionSchema = z.tuple([
   z.number().finite().min(-90).max(90),
 ]);
 
+export const seekerLocationSchema = z
+  .object({
+    position: positionSchema,
+    accuracyMeters: z.number().finite().min(0).max(100_000).optional(),
+  })
+  .strict();
+
 function validCoordinates(value: unknown): boolean {
   if (typeof value === "number") return Number.isFinite(value);
   return Array.isArray(value) && value.length > 0 && value.every(validCoordinates);
