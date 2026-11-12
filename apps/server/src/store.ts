@@ -759,6 +759,11 @@ export class GameStore {
       boundary: decode<AreaFeature>(game.boundaryGeojson)!,
       subdivisions: decode<FeatureCollection<Polygon | MultiPolygon>>(game.subdivisionsGeojson),
       datasets: datasetItems,
+      transitStations: decode<FeatureCollection<Point>>(game.transitStationsGeojson),
+      transitLines: decode<FeatureCollection<LineString | MultiLineString>>(
+        game.transitLinesGeojson,
+      ),
+      transitModes: decode<TransitMode[]>(game.transitModesJson) ?? [],
     };
   }
 

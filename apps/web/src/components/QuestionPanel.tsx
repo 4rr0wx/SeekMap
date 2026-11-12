@@ -19,10 +19,12 @@ import {
   getQuestionAnswers,
   getQuestionDefinition,
   getQuestionReferenceInfo,
+  isTransitQuestionAvailable,
   QUESTION_DEFINITIONS,
   type GameState,
   type MapFeature,
   type MapFeatureCollection,
+  type QuestionContext,
   type QuestionInstance,
 } from "@hideseek/shared";
 import { patch, post, remove } from "../api";
@@ -32,6 +34,17 @@ interface CommonProps {
   token: string;
   refresh: () => Promise<void>;
   onError: (message: string | null) => void;
+}
+
+function questionContextFromState(state: GameState): QuestionContext {
+  return {
+    boundary: state.game.boundary,
+    subdivisions: state.game.subdivisions,
+    datasets: state.datasets,
+    transitStations: state.game.transitStations,
+    transitLines: state.game.transitLines,
+    transitModes: state.game.transitModes,
+  };
 }
 
 interface ComposerProps extends CommonProps {
@@ -118,9 +131,18 @@ export function QuestionComposer({
   const [note, setNote] = useState(String(initial.note ?? ""));
   const [busy, setBusy] = useState(false);
   const definition = getQuestionDefinition(definitionId);
-  const allowed = QUESTION_DEFINITIONS.filter(
-    (item) => state.questionConfigs.find((config) => config.definitionId === item.id)?.enabled,
-  );
+  const engineContext = questionContextFromState(state);
+  const transitAvailableKey = [
+    state.game.transitStations?.features.length ?? 0,
+    state.game.transitLines?.features.length ?? 0,
+  ].join(":");
+  const allowed = QUESTION_DEFINITIONS.filter((item) => {
+    if (!state.questionConfigs.find((config) => config.definitionId === item.id)?.enabled) {
+      return false;
+    }
+    return isTransitQuestionAvailable(item.id, engineContext);
+  });
+  const allowedIds = allowed.map((item) => item.id).join("|");
   const datasets = state.datasets;
   const questionConfig = state.questionConfigs.find(
     (config) => config.definitionId === definitionId,
@@ -142,7 +164,12 @@ export function QuestionComposer({
     if (!pA || (definition.parameterKind === "THERMOMETER" && !pB)) return null;
     if (definition.parameterKind === "RADAR") return { center: pA, radiusMeters };
     if (definition.parameterKind === "THERMOMETER") return { start: pA, end: pB };
-    if (definition.parameterKind === "POINT") return { referencePoint: pA };
+    if (definition.parameterKind === "POINT") {
+      return {
+        referencePoint: pA,
+        ...(note ? { note } : {}),
+      };
+    }
     if (definition.category === "TENTACLES") {
       return {
         referencePoint: pA,
@@ -158,18 +185,15 @@ export function QuestionComposer({
     };
   }
 
-  const composerReferenceInfo =
-    pointA && datasetId
-      ? getQuestionReferenceInfo(
-          definitionId,
-          { referencePoint: pointA, datasetId },
-          {
-            boundary: state.game.boundary,
-            subdivisions: state.game.subdivisions,
-            datasets: state.datasets,
-          },
-        )
-      : null;
+  const composerReferenceInfo = pointA
+    ? getQuestionReferenceInfo(
+        definitionId,
+        definition.parameterKind === "DATASET" && datasetId
+          ? { referencePoint: pointA, datasetId }
+          : { referencePoint: pointA },
+        engineContext,
+      )
+    : null;
 
   useEffect(() => {
     if (!pickedPoint) return;
@@ -178,17 +202,22 @@ export function QuestionComposer({
   }, [pickedPoint]);
 
   useEffect(() => {
+    if (question) return;
+    if (!allowedIds) return;
+    if (allowedIds.split("|").includes(definitionId)) return;
+    const fallback = allowedIds.split("|")[0];
+    if (fallback) setDefinitionId(fallback);
+  }, [allowedIds, definitionId, question, transitAvailableKey]);
+
+  useEffect(() => {
     const parameters = currentParameters(effectivePointA, effectivePointB);
     if (!parameters || (definition.parameterKind === "DATASET" && !datasetId)) {
       onPreviewChange(null);
       return;
     }
     try {
-      const preview = buildQuestionArtifacts(definitionId, parameters, null, {
-        boundary: state.game.boundary,
-        subdivisions: state.game.subdivisions,
-        datasets: state.datasets,
-      }).artifacts.visualization;
+      const preview = buildQuestionArtifacts(definitionId, parameters, null, engineContext)
+        .artifacts.visualization;
       onPreviewChange(preview);
     } catch {
       onPreviewChange(null);
@@ -392,6 +421,35 @@ export function QuestionComposer({
             </label>
           </>
         )}
+        {(definitionId === "matching.transit-station" ||
+          definitionId === "measuring.transit-station" ||
+          definitionId === "matching.transit-line") && (
+          <>
+            {composerReferenceInfo?.placeName && (
+              <p className="field-help">
+                <strong>Nearest transit station:</strong> {composerReferenceInfo.placeName}
+              </p>
+            )}
+            {definitionId === "matching.transit-line" ? (
+              <p className="field-help">
+                Transit line membership is tracked only until OSM route tagging is verified for this
+                game area.
+              </p>
+            ) : (
+              <p className="field-help">
+                Uses cached in-boundary transit stations for the enabled modes of this game.
+              </p>
+            )}
+            <label>
+              Rule note (optional)
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                maxLength={500}
+              />
+            </label>
+          </>
+        )}
 
         <div className="sheet-actions">
           <button type="button" className="button secondary" onClick={onClose}>
@@ -495,11 +553,7 @@ export function QuestionActivitySidebar({
               ? state.me.role === "SEEKER"
               : (state.game.hiderAssistance && state.me.role === "HIDER") ||
                 (!state.game.hiderAssistance && state.me.role === "SEEKER"));
-          const questionContext = {
-            boundary: state.game.boundary,
-            subdivisions: state.game.subdivisions,
-            datasets: state.datasets,
-          };
+          const questionContext = questionContextFromState(state);
           const answers = getQuestionAnswers(definition, question.parameters, questionContext);
           const referenceInfo = getQuestionReferenceInfo(
             question.definitionId,
@@ -546,6 +600,14 @@ export function QuestionActivitySidebar({
                   <strong>Seeker's division:</strong> {referenceInfo.divisionName}
                 </p>
               )}
+              {!dataset &&
+                referenceInfo?.placeName &&
+                (question.definitionId === "matching.transit-station" ||
+                  question.definitionId === "measuring.transit-station") && (
+                  <p className="dataset-callout">
+                    <strong>Seeker's nearest station:</strong> {referenceInfo.placeName}
+                  </p>
+                )}
               <p className="question-prompt">
                 {question.definitionId === "matching.dataset" && dataset
                   ? `Is your nearest ${dataset.name} place the same as the Seeker's nearest?`
@@ -553,7 +615,11 @@ export function QuestionActivitySidebar({
                     ? `Compared with the Seeker, are you closer to or further from the nearest ${dataset.name} place?`
                     : question.definitionId === "tentacles.dataset" && dataset
                       ? `Which nearby place in ${dataset.name} within the radius is the Hider closest to, or are they outside?`
-                      : definition.description}
+                      : question.definitionId === "matching.transit-station"
+                        ? "Is your nearest transit station the same as the Seeker's nearest?"
+                        : question.definitionId === "measuring.transit-station"
+                          ? "Compared with the Seeker, are you closer to or further from your nearest transit station?"
+                          : definition.description}
               </p>
               {localEvaluation && (
                 <div className={`local-evaluation ${!localPosition ? "missing-location" : ""}`}>
@@ -756,11 +822,7 @@ export function QuestionHistory({
           )}
           {state.questions.map((question) => {
             const definition = getQuestionDefinition(question.definitionId);
-            const questionContext = {
-              boundary: state.game.boundary,
-              subdivisions: state.game.subdivisions,
-              datasets: state.datasets,
-            };
+            const questionContext = questionContextFromState(state);
             const answers = getQuestionAnswers(definition, question.parameters, questionContext);
             const referenceInfo = getQuestionReferenceInfo(
               question.definitionId,

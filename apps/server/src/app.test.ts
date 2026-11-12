@@ -588,6 +588,156 @@ describe("server game integrity", () => {
     expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
   });
 
+  it("runs a transit-station Matching question and rejects drafts without transit data", async () => {
+    const mockTransitLines = turf.featureCollection([
+      turf.lineString(
+        [
+          [16.25, 48.2],
+          [16.55, 48.2],
+        ],
+        { name: "U4", railway: "subway", transitMode: "subway" },
+      ),
+    ]);
+    const mockTransitStations = turf.featureCollection([
+      turf.point([16.27, 48.2], { name: "Westbahnhof" }),
+      turf.point([16.53, 48.2], { name: "Landstraße" }),
+    ]);
+    const mockOsm = {
+      searchAreas: vi.fn(),
+      subdivisionLevels: vi.fn(),
+      subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([])),
+      transit: vi.fn().mockResolvedValue({
+        lines: mockTransitLines,
+        stations: mockTransitStations,
+      }),
+    } as unknown as OsmService;
+
+    const { app } = await fixture(undefined, {}, { osm: mockOsm });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/games?syncOsm=true",
+      payload: {
+        name: "Transit Matching Test",
+        hidingDurationMinutes: 30,
+        hiderAssistance: true,
+        osm: {
+          osmType: "relation",
+          osmId: "109166",
+          displayName: "Vienna",
+          boundingBox: [16.2, 48.1, 16.6, 48.35],
+        },
+        boundary,
+        firstDivisionAdminLevel: null,
+        transitModes: ["subway", "tram"],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const seeker = (
+      await app.inject({
+        method: "POST",
+        url: "/api/game/join",
+        payload: { displayName: "Seek", role: "SEEKER" },
+      })
+    ).json<{ token: string }>();
+    const hider = (
+      await app.inject({
+        method: "POST",
+        url: "/api/game/join",
+        payload: { displayName: "Hide", role: "HIDER" },
+      })
+    ).json<{ token: string }>();
+
+    const stateWithTransit = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(stateWithTransit.game.transitStations?.features).toHaveLength(2);
+    expect(
+      stateWithTransit.questionConfigs.some(
+        (config) => config.definitionId === "matching.transit-station" && config.enabled,
+      ),
+    ).toBe(true);
+
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "matching.transit-station",
+        parameters: { referencePoint: [16.26, 48.2] },
+      },
+    });
+    expect(draft.statusCode).toBe(201);
+    const questionId = draft.json<{ id: string }>().id;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${questionId}/ask`,
+          headers: auth(seeker.token),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const hiderState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(hider.token) })
+    ).json<GameState>();
+    expect(hiderState.questions[0]?.parameters).toEqual({ referencePoint: [16.26, 48.2] });
+    expect(JSON.stringify(hiderState)).not.toContain("hiderLocation");
+    expect(JSON.stringify(hiderState.questions[0]?.parameters)).not.toMatch(/48\.\d+,\s*16\./);
+
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${questionId}/answer`,
+          headers: auth(hider.token),
+          payload: { answer: "SAME" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const answered = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(answered.questions[0]?.visualization?.type).toBe("FeatureCollection");
+    const originalArea = turf.area(answered.game.possibleArea!);
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/apply`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const applied = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
+
+    const measuringDraft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "measuring.transit-station",
+        parameters: { referencePoint: [16.26, 48.2] },
+      },
+    });
+    expect(measuringDraft.statusCode).toBe(201);
+
+    const { app: bareApp } = await fixture();
+    const bare = await createAndJoin(bareApp);
+    const missingTransit = await bareApp.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(bare.seeker.token),
+      payload: {
+        definitionId: "matching.transit-station",
+        parameters: { referencePoint: [16.26, 48.2] },
+      },
+    });
+    expect(missingTransit.statusCode).toBe(409);
+    expect(missingTransit.json<{ error: string }>().error).toMatch(/No transit stations/);
+  });
+
   it("runs a Tentacles question with candidate places and applies an area effect", async () => {
     const { app } = await fixture();
     const { seeker, hider } = await createAndJoin(app);
