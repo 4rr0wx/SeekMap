@@ -705,6 +705,160 @@ describe("server game integrity", () => {
     expect(seekerState.questions.find((question) => question.id === second.id)?.cost).toBe(2);
   });
 
+  it("omits PENDING questions from Hider snapshots when Assistance is off", async () => {
+    const { app } = await fixture();
+    const { seeker, hider } = await createAndJoin(app, false);
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "radar.standard",
+        parameters: { center: [16.4, 48.2], radiusMeters: 1000 },
+      },
+    });
+    const id = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const seekerState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    const hiderState = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(hider.token) })
+    ).json<GameState>();
+    expect(seekerState.questions.some((question) => question.id === id)).toBe(true);
+    expect(seekerState.questions.find((question) => question.id === id)?.status).toBe("PENDING");
+    expect(hiderState.questions.some((question) => question.id === id)).toBe(false);
+  });
+
+  it("rejects question mutations after the game ends and zeroes seeking time when ended during hiding", async () => {
+    const { app, store } = await fixture();
+    const { seeker } = await createAndJoin(app);
+    await app.inject({
+      method: "POST",
+      url: "/api/game/start",
+      headers: auth(seeker.token),
+    });
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "radar.standard",
+        parameters: { center: [16.4, 48.2], radiusMeters: 1000 },
+      },
+    });
+    const id = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+
+    const ended = await app.inject({
+      method: "POST",
+      url: "/api/game/end",
+      headers: auth(seeker.token),
+    });
+    expect(ended.statusCode).toBe(200);
+    const endedState = store.getState(seeker.token);
+    expect(endedState.game.phase).toBe("ENDED");
+    expect(endedState.game.phaseStartedAt).toBe(endedState.game.endedAt);
+
+    const createAfterEnd = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "radar.standard",
+        parameters: { center: [16.35, 48.22], radiusMeters: 500 },
+      },
+    });
+    expect(createAfterEnd.statusCode).toBe(409);
+
+    const answerAfterEnd = await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/answer`,
+      headers: auth(seeker.token),
+      payload: { answer: "INSIDE" },
+    });
+    expect(answerAfterEnd.statusCode).toBe(409);
+
+    const patchAfterEnd = await app.inject({
+      method: "PATCH",
+      url: `/api/questions/${id}`,
+      headers: auth(seeker.token),
+      payload: { enabled: false },
+    });
+    expect(patchAfterEnd.statusCode).toBe(409);
+  });
+
+  it("rejects First Division answers before subdivisions are loaded", async () => {
+    const { app } = await fixture();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/games",
+      payload: {
+        name: "No subdivisions yet",
+        hidingDurationMinutes: 30,
+        hiderAssistance: true,
+        osm: {
+          osmType: "relation",
+          osmId: "109166",
+          displayName: "Vienna",
+          boundingBox: [16.2, 48.1, 16.6, 48.35],
+        },
+        boundary,
+        firstDivisionAdminLevel: null,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const seeker = (
+      await app.inject({
+        method: "POST",
+        url: "/api/game/join",
+        payload: { displayName: "Seek", role: "SEEKER" },
+      })
+    ).json<{ token: string }>();
+    const hider = (
+      await app.inject({
+        method: "POST",
+        url: "/api/game/join",
+        payload: { displayName: "Hide", role: "HIDER" },
+      })
+    ).json<{ token: string }>();
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "matching.first-division",
+        parameters: { referencePoint: [16.37, 48.2] },
+      },
+    });
+    expect(draft.statusCode).toBe(201);
+    const id = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    const answer = await app.inject({
+      method: "POST",
+      url: `/api/questions/${id}/answer`,
+      headers: auth(hider.token),
+      payload: { answer: "SAME" },
+    });
+    expect(answer.statusCode).toBe(409);
+    expect(answer.json<{ error: string }>().error).toMatch(/subdivisions are not loaded/i);
+  });
+
   it("keeps Seeker markers out of the Hider API view", async () => {
     const { app } = await fixture();
     const { seeker, hider } = await createAndJoin(app);

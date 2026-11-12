@@ -684,6 +684,8 @@ export class GameStore {
         .set({
           phase: "ENDED",
           lifecycle: "ENDED",
+          // Seeking never started — keep final seeking duration at zero.
+          ...(game.phase === "HIDING" ? { phaseStartedAt: timestamp } : {}),
           endedAt: timestamp,
           updatedAt: timestamp,
           revision: game.revision + 1,
@@ -691,6 +693,36 @@ export class GameStore {
         .where(eq(games.id, game.id))
         .run();
     });
+  }
+
+  private requirePlayableGame(gameId: string) {
+    const game = this.currentRow();
+    if (!game || game.id !== gameId) throw new DomainError("No current game", 404);
+    if (game.phase === "ENDED") {
+      throw new DomainError("The game has ended; clear it before changing the board", 409);
+    }
+    return game;
+  }
+
+  private buildArtifactsOrThrow(
+    definitionId: string,
+    parameters: Record<string, unknown>,
+    answer: string | null,
+    gameId: string,
+  ) {
+    try {
+      return buildQuestionArtifacts(
+        definitionId,
+        parameters,
+        answer,
+        this.context(gameId, getQuestionDefinition(definitionId).parameterKind === "DATASET"),
+      );
+    } catch (cause) {
+      throw new DomainError(
+        cause instanceof Error ? cause.message : "Could not build question geometry",
+        409,
+      );
+    }
   }
 
   resetGame(token: string | undefined): void {
@@ -736,8 +768,7 @@ export class GameStore {
     parameters: Record<string, unknown>,
   ): string {
     const player = this.requireSeeker(token);
-    const game = this.currentRow();
-    if (!game) throw new DomainError("No current game", 404);
+    const game = this.requirePlayableGame(player.gameId);
     const config = this.db
       .select()
       .from(questionConfigs)
@@ -747,12 +778,7 @@ export class GameStore {
       .get();
     if (!config?.enabled) throw new DomainError("This question is disabled", 409);
     const definition = getQuestionDefinition(definitionId);
-    const built = buildQuestionArtifacts(
-      definitionId,
-      parameters,
-      null,
-      this.context(game.id, definition.parameterKind === "DATASET"),
-    );
+    const built = this.buildArtifactsOrThrow(definitionId, parameters, null, game.id);
     const id = randomUUID();
     const timestamp = now();
     this.db
@@ -791,41 +817,42 @@ export class GameStore {
     update: { parameters?: Record<string, unknown> | undefined; enabled?: boolean | undefined },
   ): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(questions)
       .where(and(eq(questions.id, id), eq(questions.gameId, player.gameId)))
       .get();
     if (!row) throw new DomainError("Question not found", 404);
+    if (update.parameters !== undefined && row.status === "PENDING") {
+      throw new DomainError(
+        "A pending question's parameters cannot be edited while awaiting an answer",
+        409,
+      );
+    }
     const parameters = update.parameters ?? decode<Record<string, unknown>>(row.parametersJson)!;
     const answer = decode<string>(row.answerJson);
-    const built = buildQuestionArtifacts(
-      row.definitionId,
-      parameters,
-      answer,
-      this.context(
-        player.gameId,
-        getQuestionDefinition(row.definitionId).parameterKind === "DATASET",
-      ),
-    );
-    this.db
-      .update(questions)
-      .set({
-        parametersJson: encode(built.parameters),
-        visualizationGeojson: built.artifacts.visualization
-          ? encode(built.artifacts.visualization)
-          : null,
-        effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
-        enabled: update.enabled ?? row.enabled,
-        updatedAt: now(),
-      })
-      .where(eq(questions.id, id))
-      .run();
-    this.recompute(player.gameId);
+    const built = this.buildArtifactsOrThrow(row.definitionId, parameters, answer, player.gameId);
+    this.db.transaction((tx) => {
+      tx.update(questions)
+        .set({
+          parametersJson: encode(built.parameters),
+          visualizationGeojson: built.artifacts.visualization
+            ? encode(built.artifacts.visualization)
+            : null,
+          effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
+          enabled: update.enabled ?? row.enabled,
+          updatedAt: now(),
+        })
+        .where(eq(questions.id, id))
+        .run();
+      this.recompute(player.gameId, tx);
+    });
   }
 
   askQuestion(token: string | undefined, id: string): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(questions)
@@ -880,13 +907,13 @@ export class GameStore {
 
   answerQuestion(token: string | undefined, id: string, answer: string): void {
     const player = this.authenticate(token);
-    const game = this.currentRow();
+    const game = this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(questions)
       .where(and(eq(questions.id, id), eq(questions.gameId, player.gameId)))
       .get();
-    if (!game || !row) throw new DomainError("Question not found", 404);
+    if (!row) throw new DomainError("Question not found", 404);
     if (row.status !== "PENDING")
       throw new DomainError("Only a pending question can be answered", 409);
     if (game.seekerOnly) {
@@ -899,12 +926,15 @@ export class GameStore {
         403,
       );
     }
-    const built = buildQuestionArtifacts(
+    const built = this.buildArtifactsOrThrow(
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
-      this.context(game.id, getQuestionDefinition(row.definitionId).parameterKind === "DATASET"),
+      game.id,
     );
+    if (!built.artifacts.effect) {
+      throw new DomainError("This answer does not produce a usable area effect", 409);
+    }
     const timestamp = now();
     this.db
       .update(questions)
@@ -914,7 +944,7 @@ export class GameStore {
         visualizationGeojson: built.artifacts.visualization
           ? encode(built.artifacts.visualization)
           : null,
-        effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
+        effectGeojson: encode(built.artifacts.effect),
         answeredAt: timestamp,
         updatedAt: timestamp,
       })
@@ -925,6 +955,7 @@ export class GameStore {
 
   reviseQuestionAnswer(token: string | undefined, id: string, answer: string): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(questions)
@@ -934,35 +965,45 @@ export class GameStore {
     if (row.status !== "ANSWERED" && row.status !== "APPLIED") {
       throw new DomainError("Only a recorded answer can be corrected", 409);
     }
-    const built = buildQuestionArtifacts(
+    const built = this.buildArtifactsOrThrow(
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
-      this.context(
-        player.gameId,
-        getQuestionDefinition(row.definitionId).parameterKind === "DATASET",
-      ),
+      player.gameId,
     );
+    if (!built.artifacts.effect) {
+      throw new DomainError("This answer does not produce a usable area effect", 409);
+    }
     const timestamp = now();
-    this.db
-      .update(questions)
-      .set({
-        answerJson: encode(answer),
-        visualizationGeojson: built.artifacts.visualization
-          ? encode(built.artifacts.visualization)
-          : null,
-        effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
-        answeredAt: timestamp,
-        updatedAt: timestamp,
-      })
-      .where(eq(questions.id, id))
-      .run();
-    if (row.status === "APPLIED") this.recompute(player.gameId);
-    else this.bump(player.gameId);
+    this.db.transaction((tx) => {
+      tx.update(questions)
+        .set({
+          answerJson: encode(answer),
+          visualizationGeojson: built.artifacts.visualization
+            ? encode(built.artifacts.visualization)
+            : null,
+          effectGeojson: encode(built.artifacts.effect),
+          answeredAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .where(eq(questions.id, id))
+        .run();
+      if (row.status === "APPLIED") this.recompute(player.gameId, tx);
+      else {
+        const game = tx.select().from(games).where(eq(games.id, player.gameId)).get();
+        if (game) {
+          tx.update(games)
+            .set({ revision: game.revision + 1, updatedAt: now() })
+            .where(eq(games.id, player.gameId))
+            .run();
+        }
+      }
+    });
   }
 
   applyQuestion(token: string | undefined, id: string): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(questions)
@@ -971,28 +1012,54 @@ export class GameStore {
     if (!row) throw new DomainError("Question not found", 404);
     if (row.status !== "ANSWERED" && row.status !== "APPLIED")
       throw new DomainError("Answer the question before applying it", 409);
+    const answer = decode<string>(row.answerJson);
+    if (!answer) throw new DomainError("Answer the question before applying it", 409);
+    // Rebuild so late-loaded subdivisions/datasets still produce a real effect.
+    const built = this.buildArtifactsOrThrow(
+      row.definitionId,
+      decode<Record<string, unknown>>(row.parametersJson)!,
+      answer,
+      player.gameId,
+    );
+    if (!built.artifacts.effect) {
+      throw new DomainError("This answer does not produce a usable area effect", 409);
+    }
     const timestamp = now();
-    this.db
-      .update(questions)
-      .set({ status: "APPLIED", appliedAt: timestamp, updatedAt: timestamp })
-      .where(eq(questions.id, id))
-      .run();
-    this.recompute(player.gameId);
+    this.db.transaction((tx) => {
+      tx.update(questions)
+        .set({
+          status: "APPLIED",
+          visualizationGeojson: built.artifacts.visualization
+            ? encode(built.artifacts.visualization)
+            : null,
+          effectGeojson: encode(built.artifacts.effect),
+          appliedAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .where(eq(questions.id, id))
+        .run();
+      this.recompute(player.gameId, tx);
+    });
   }
 
   deleteQuestion(token: string | undefined, id: string): void {
     const player = this.requireSeeker(token);
-    this.db
-      .delete(questions)
-      .where(and(eq(questions.id, id), eq(questions.gameId, player.gameId)))
-      .run();
-    this.recompute(player.gameId);
+    this.requirePlayableGame(player.gameId);
+    this.db.transaction((tx) => {
+      tx.delete(questions)
+        .where(and(eq(questions.id, id), eq(questions.gameId, player.gameId)))
+        .run();
+      this.recompute(player.gameId, tx);
+    });
   }
 
-  private recompute(gameId: string): void {
-    const game = this.db.select().from(games).where(eq(games.id, gameId)).get();
+  private recompute(
+    gameId: string,
+    db: Pick<DatabaseBundle["db"], "select" | "update"> = this.db,
+  ): void {
+    const game = db.select().from(games).where(eq(games.id, gameId)).get();
     if (!game) return;
-    const effects = this.db
+    const effects = db
       .select()
       .from(questions)
       .where(
@@ -1009,8 +1076,7 @@ export class GameStore {
         return effect ? [effect] : [];
       });
     const possible = recomputePossibleArea(decode<AreaFeature>(game.boundaryGeojson)!, effects);
-    this.db
-      .update(games)
+    db.update(games)
       .set({
         possibleAreaGeojson: possible ? encode(possible) : null,
         revision: game.revision + 1,
@@ -1214,6 +1280,7 @@ export class GameStore {
     input: { position: unknown; title: string; note?: string | null | undefined },
   ): string {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const id = randomUUID();
     const timestamp = now();
     this.db
@@ -1239,6 +1306,7 @@ export class GameStore {
     input: { position?: unknown; title?: string | undefined; note?: string | null | undefined },
   ): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     const row = this.db
       .select()
       .from(seekerMarkers)
@@ -1260,6 +1328,7 @@ export class GameStore {
 
   deleteMarker(token: string | undefined, id: string): void {
     const player = this.requireSeeker(token);
+    this.requirePlayableGame(player.gameId);
     this.db
       .delete(seekerMarkers)
       .where(and(eq(seekerMarkers.id, id), eq(seekerMarkers.gameId, player.gameId)))

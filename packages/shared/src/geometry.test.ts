@@ -15,6 +15,7 @@ import {
   thermometerRegion,
   projectToWebMercator,
   unprojectFromWebMercator,
+  webMercatorDistanceMeters,
   type AreaFeature,
   type UploadedDataset,
 } from "./index";
@@ -224,6 +225,91 @@ describe("area geometry", () => {
     expect(turf.booleanPointInPolygon(turf.point(end), hot)).toBe(true);
     expect(turf.booleanPointInPolygon(turf.point(start), hot)).toBe(false);
     expect(turf.booleanPointInPolygon(turf.point(end), cold)).toBe(false);
+  });
+
+  it("aligns Thermometer local Assistance with Mercator hot/cold regions", () => {
+    const largeBoundary = turf.polygon([
+      [
+        [14.4, 47.4],
+        [17.1, 47.4],
+        [17.1, 49.0],
+        [14.4, 49.0],
+        [14.4, 47.4],
+      ],
+    ]) as AreaFeature;
+    const start: [number, number] = [15.5, 47.6];
+    const end: [number, number] = [16.5, 48.8];
+    const hot = thermometerRegion(largeBoundary, start, end, "END");
+    const cold = thermometerRegion(largeBoundary, start, end, "START");
+    const context = { boundary: largeBoundary, subdivisions: null, datasets: [] };
+
+    // Sample near the Mercator midpoint along the divider so geodesic and Mercator can disagree.
+    const midMercator = unprojectFromWebMercator([
+      (projectToWebMercator(start)[0] + projectToWebMercator(end)[0]) / 2,
+      (projectToWebMercator(start)[1] + projectToWebMercator(end)[1]) / 2,
+    ]);
+    const samples: [number, number][] = [
+      [midMercator[0] + 0.08, midMercator[1] - 0.02],
+      [midMercator[0] - 0.08, midMercator[1] + 0.02],
+      [15.7, 48.5],
+      [16.3, 47.9],
+    ];
+
+    for (const sample of samples) {
+      if (!turf.booleanPointInPolygon(turf.point(sample), largeBoundary)) continue;
+      const inHot = turf.booleanPointInPolygon(turf.point(sample), hot);
+      const inCold = turf.booleanPointInPolygon(turf.point(sample), cold);
+      expect(inHot || inCold).toBe(true);
+      const evaluation = evaluateQuestionAtPosition(
+        "thermometer.standard",
+        { start, end },
+        sample,
+        context,
+      );
+      expect(evaluation?.answer).toBe(inHot ? "HOTTER" : "COLDER");
+      const hotterByMercator =
+        webMercatorDistanceMeters(sample, end) <= webMercatorDistanceMeters(sample, start);
+      expect(evaluation?.answer).toBe(hotterByMercator ? "HOTTER" : "COLDER");
+    }
+  });
+
+  it("rejects First Division answers when subdivisions are missing or the point is outside", () => {
+    const context = { boundary, subdivisions: null, datasets: [] };
+    expect(() =>
+      buildQuestionArtifacts(
+        "matching.first-division",
+        { referencePoint: [0.5, 1] },
+        "SAME",
+        context,
+      ),
+    ).toThrow(/subdivisions are not loaded/i);
+
+    const subdivisions = turf.featureCollection([
+      turf.polygon([
+        [
+          [0, 0],
+          [1, 0],
+          [1, 2],
+          [0, 2],
+          [0, 0],
+        ],
+      ]),
+    ]);
+    expect(() =>
+      buildQuestionArtifacts("matching.first-division", { referencePoint: [1.5, 1] }, "DIFFERENT", {
+        boundary,
+        subdivisions,
+        datasets: [],
+      }),
+    ).toThrow(/outside every configured subdivision/i);
+
+    const draft = buildQuestionArtifacts(
+      "matching.first-division",
+      { referencePoint: [0.5, 1] },
+      null,
+      context,
+    );
+    expect(draft.artifacts.effect).toBeNull();
   });
 
   it("accurately partitions large boundaries like Lower Austria without Mercator distortion", () => {

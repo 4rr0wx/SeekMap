@@ -124,6 +124,13 @@ export function unprojectFromWebMercator(point: [number, number]): [number, numb
   ];
 }
 
+/** Euclidean distance in Web Mercator metres — matches Thermometer / Voronoi half-planes. */
+export function webMercatorDistanceMeters(left: [number, number], right: [number, number]): number {
+  const projectedLeft = projectToWebMercator(left);
+  const projectedRight = projectToWebMercator(right);
+  return Math.hypot(projectedLeft[0] - projectedRight[0], projectedLeft[1] - projectedRight[1]);
+}
+
 interface ThermometerPlane {
   divider: Feature<LineString>;
   targetHalfPlane: AreaFeature;

@@ -6,6 +6,7 @@ import {
   radarCircle,
   subtractArea,
   thermometerRegion,
+  webMercatorDistanceMeters,
 } from "./geometry.js";
 import type { AreaFeature, MapFeature, UploadedDataset } from "./types.js";
 
@@ -41,10 +42,15 @@ export function datasetPlaces(dataset: UploadedDataset, boundary: AreaFeature): 
 export function nearestDatasetPlace(
   places: DatasetPlace[],
   position: [number, number],
+  metric: "geodesic" | "webMercator" = "geodesic",
 ): (DatasetPlace & { distanceMeters: number }) | null {
   let nearest: (DatasetPlace & { distanceMeters: number }) | null = null;
   for (const place of places) {
-    const distanceMeters = turf.distance(position, place.point, { units: "meters" });
+    const placePosition = place.point.geometry.coordinates as [number, number];
+    const distanceMeters =
+      metric === "webMercator"
+        ? webMercatorDistanceMeters(position, placePosition)
+        : turf.distance(position, place.point, { units: "meters" });
     if (!nearest || distanceMeters < nearest.distanceMeters) nearest = { ...place, distanceMeters };
   }
   return nearest;
@@ -79,7 +85,7 @@ export function tentaclePlaceRegion(
     const otherPosition = other.point.geometry.coordinates as [number, number];
     const nearerHalf = thermometerRegion(region, selectedPosition, otherPosition, "START");
     const clipped = intersectAreas(region, nearerHalf);
-    if (!clipped) continue;
+    if (!clipped) throw new Error("Tentacle region could not be constructed");
     region = clipped;
   }
   return region;

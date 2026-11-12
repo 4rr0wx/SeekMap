@@ -14,6 +14,7 @@ import {
   subtractArea,
   thermometerDivider,
   thermometerRegion,
+  webMercatorDistanceMeters,
 } from "./geometry.js";
 import {
   candidateTentaclePlaces,
@@ -236,11 +237,18 @@ const firstDivision: QuestionDefinition<z.infer<typeof firstDivisionParametersSc
   repeatRule: { type: "LINEAR", increment: 1 },
   buildArtifacts(parameters, answer, context) {
     if (!context.subdivisions) {
+      if (answer) {
+        throw new Error("First Division subdivisions are not loaded yet");
+      }
       return { visualization: pointVisualization(parameters.referencePoint), effect: null };
     }
     const division = findContainingArea(context.subdivisions, parameters.referencePoint);
-    if (!division)
+    if (!division) {
+      if (answer) {
+        throw new Error("The Seeker reference point is outside every configured subdivision");
+      }
       return { visualization: pointVisualization(parameters.referencePoint), effect: null };
+    }
     return {
       visualization: division,
       effect: answer
@@ -271,7 +279,7 @@ const matchingPlaces: QuestionDefinition<z.infer<typeof placeQuestionParametersS
       context,
       parameters.referencePoint,
     );
-    const selected = nearestDatasetPlace(places, parameters.referencePoint);
+    const selected = nearestDatasetPlace(places, parameters.referencePoint, "webMercator");
     if (!selected) throw new Error(`${dataset.name} has no usable places inside the game boundary`);
     const sameRegion = matchingPlaceRegion(context.boundary, places, selected);
     const differentRegion = subtractArea(context.boundary, sameRegion);
@@ -504,7 +512,12 @@ export function getQuestionReferenceInfo(
     if (definitionId === "matching.dataset" || definitionId === "measuring.dataset") {
       const dataset = datasetFor(String(parameters.datasetId), context);
       const places = datasetPlaces(dataset, context.boundary);
-      const seeker = nearestDatasetPlace(places, parameters.referencePoint as [number, number]);
+      const metric = definitionId === "matching.dataset" ? "webMercator" : "geodesic";
+      const seeker = nearestDatasetPlace(
+        places,
+        parameters.referencePoint as [number, number],
+        metric,
+      );
       if (!seeker) return null;
       return {
         placeName: seeker.name,
@@ -566,8 +579,9 @@ export function evaluateQuestionAtPosition(
     }
     const start = parameters.start as [number, number];
     const end = parameters.end as [number, number];
-    const startDistance = turf.distance(position, start, { units: "meters" });
-    const endDistance = turf.distance(position, end, { units: "meters" });
+    // Match applied Thermometer geometry, which partitions in Web Mercator space.
+    const startDistance = webMercatorDistanceMeters(position, start);
+    const endDistance = webMercatorDistanceMeters(position, end);
     const hotter = endDistance <= startDistance;
     return {
       answer: hotter ? "HOTTER" : "COLDER",
@@ -615,7 +629,13 @@ export function evaluateQuestionAtPosition(
   if (definitionId === "matching.dataset" || definitionId === "measuring.dataset") {
     const dataset = datasetFor(String(parameters.datasetId), context);
     const places = datasetPlaces(dataset, context.boundary);
-    const seeker = nearestDatasetPlace(places, parameters.referencePoint as [number, number]);
+    // Matching cells are Mercator Voronoi; Measuring distances stay geodesic.
+    const metric = definitionId === "matching.dataset" ? "webMercator" : "geodesic";
+    const seeker = nearestDatasetPlace(
+      places,
+      parameters.referencePoint as [number, number],
+      metric,
+    );
     if (!seeker) return null;
     if (!position) {
       if (definitionId === "matching.dataset") {
@@ -631,7 +651,7 @@ export function evaluateQuestionAtPosition(
         details: [`Seeker: ${seeker.name} · ${formatMeters(seeker.distanceMeters)}`],
       };
     }
-    const hider = nearestDatasetPlace(places, position);
+    const hider = nearestDatasetPlace(places, position, metric);
     if (!hider) return null;
     if (definitionId === "matching.dataset") {
       const same = seeker.index === hider.index;
@@ -692,7 +712,8 @@ export function evaluateQuestionAtPosition(
         details: [`Distance to centre: ${formatMeters(distanceToCenter)}`],
       };
     }
-    const nearest = nearestDatasetPlace(candidates, position)!;
+    // Tentacle cells are Mercator half-planes inside the geodesic radius.
+    const nearest = nearestDatasetPlace(candidates, position, "webMercator")!;
     return {
       answer: `place:${nearest.index}`,
       summary: `You are in the tentacle zone of ${nearest.name}.`,

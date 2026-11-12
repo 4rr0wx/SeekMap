@@ -128,6 +128,7 @@ export function GameScreen({
   const [draftQuestionGeometry, setDraftQuestionGeometry] = useState<
     MapFeatureCollection | MapFeature | null
   >(null);
+  const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [gameActionBusy, setGameActionBusy] = useState(false);
   const [markerDraft, setMarkerDraft] = useState<{
@@ -140,9 +141,26 @@ export function GameScreen({
   const autoEnabledTemporaryDatasetIds = useRef<string | null>(null);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setCurrentTime(new Date()), 1_000);
+    const serverMs = Date.parse(state.serverNow);
+    if (!Number.isFinite(serverMs)) return;
+    const offset = serverMs - Date.now();
+    setClockOffsetMs(offset);
+    setCurrentTime(new Date(Date.now() + offset));
+  }, [state.serverNow, state.game.revision]);
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setCurrentTime(new Date(Date.now() + clockOffsetMs)),
+      1_000,
+    );
     return () => window.clearInterval(timer);
-  }, []);
+  }, [clockOffsetMs]);
+
+  useEffect(() => {
+    if (state.game.phase === "ENDED" && composer.open) {
+      setComposer({ open: false, question: null });
+    }
+  }, [state.game.phase, composer.open]);
 
   useEffect(() => {
     const temporaryIds = state.datasets
@@ -466,7 +484,7 @@ export function GameScreen({
             <History />
             <span>History</span>
           </button>
-          {state.me.role === "SEEKER" && (
+          {state.me.role === "SEEKER" && state.game.phase !== "ENDED" && (
             <button
               className="ask-button"
               onClick={() => {
