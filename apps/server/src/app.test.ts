@@ -28,7 +28,17 @@ async function fixture(
     ...environment,
   });
   const database = openDatabase(config.databasePath);
-  const built = await buildApp(config, database, services);
+  const built = await buildApp(config, database, {
+    ...services,
+    osm:
+      services?.osm ??
+      new OsmService(database.db, config, {
+        attempts: 3,
+        attemptTimeoutMs: 100,
+        totalTimeoutMs: 1_000,
+        retryDelayMs: 0,
+      }),
+  });
   cleanups.push(async () => {
     built.stopTimer();
     built.io.close();

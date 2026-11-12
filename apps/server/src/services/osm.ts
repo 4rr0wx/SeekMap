@@ -61,98 +61,108 @@ export class OsmService {
     },
   ) {}
 
-  private async fetchJson(url: string, init: RequestInit, maxBytes: number): Promise<any> {
+  private async fetchJson(
+    urlOrUrls: string | string[],
+    init: RequestInit,
+    maxBytes: number,
+  ): Promise<any> {
+    const endpoints = (Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls]).filter(Boolean);
+    if (endpoints.length === 0) {
+      throw new OsmRequestError("OpenStreetMap service is unavailable", 503, false);
+    }
     const deadline = Date.now() + this.policy.totalTimeoutMs;
+    let lastError: OsmRequestError | undefined;
     for (let attempt = 0; attempt < this.policy.attempts; attempt++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new OsmRequestError("OpenStreetMap request timed out", 504);
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        Math.min(remaining, this.policy.attemptTimeoutMs),
-      );
       let retryAfter = this.policy.retryDelayMs * 2 ** attempt;
-      try {
-        const response = await fetch(url, {
-          ...init,
-          signal: controller.signal,
-          headers: {
-            "User-Agent": `HideSeek Atlas/0.1 (${this.config.publicUrl ?? "self-hosted"})`,
-            Accept: "application/json",
-            ...init.headers,
-          },
-        });
-        if (!response.ok) {
-          const header = response.headers.get("Retry-After");
-          if (header) {
-            const seconds = Number(header);
-            const delay = Number.isFinite(seconds)
-              ? seconds * 1_000
-              : Date.parse(header) - Date.now();
-            if (Number.isFinite(delay)) retryAfter = Math.max(retryAfter, delay);
-          }
-          await response.body?.cancel();
-          throw new OsmRequestError(
-            `OpenStreetMap service returned ${response.status}`,
-            503,
-            [429, 500, 502, 503, 504].includes(response.status),
-          );
-        }
-        const reader = response.body?.getReader();
-        if (!reader)
-          throw new OsmRequestError("OpenStreetMap returned an empty response", 502, false);
-        const chunks: Uint8Array[] = [];
-        let size = 0;
+      for (const url of endpoints) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new OsmRequestError("OpenStreetMap request timed out", 504);
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          Math.min(remaining, this.policy.attemptTimeoutMs),
+        );
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            size += value.byteLength;
-            if (size > maxBytes) {
-              await reader.cancel();
-              throw new OsmRequestError("OpenStreetMap response was too large", 502, false);
+          const response = await fetch(url, {
+            ...init,
+            signal: controller.signal,
+            headers: {
+              "User-Agent": `HideSeek Atlas/0.1 (${this.config.publicUrl ?? "self-hosted"})`,
+              Accept: "application/json",
+              ...init.headers,
+            },
+          });
+          if (!response.ok) {
+            const header = response.headers.get("Retry-After");
+            if (header) {
+              const seconds = Number(header);
+              const delay = Number.isFinite(seconds)
+                ? seconds * 1_000
+                : Date.parse(header) - Date.now();
+              if (Number.isFinite(delay)) retryAfter = Math.max(retryAfter, delay);
             }
-            chunks.push(value);
+            await response.body?.cancel();
+            throw new OsmRequestError(
+              `OpenStreetMap service returned ${response.status}`,
+              503,
+              [429, 500, 502, 503, 504].includes(response.status),
+            );
           }
+          const reader = response.body?.getReader();
+          if (!reader)
+            throw new OsmRequestError("OpenStreetMap returned an empty response", 502, false);
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              size += value.byteLength;
+              if (size > maxBytes) {
+                await reader.cancel();
+                throw new OsmRequestError("OpenStreetMap response was too large", 502, false);
+              }
+              chunks.push(value);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+          const bytes = Buffer.concat(chunks);
+          let parsed: any;
+          try {
+            parsed = JSON.parse(bytes.toString("utf8"));
+          } catch {
+            throw new OsmRequestError("OpenStreetMap returned invalid JSON", 502, false);
+          }
+          if (!parsed || typeof parsed !== "object") {
+            throw new OsmRequestError("OpenStreetMap returned an invalid response", 502, false);
+          }
+          if (typeof parsed.remark === "string" && parsed.remark.trim()) {
+            throw new OsmRequestError("Overpass could not complete the query. Please try again.");
+          }
+          return parsed;
+        } catch (cause) {
+          const error =
+            cause instanceof OsmRequestError
+              ? cause
+              : new OsmRequestError(
+                  controller.signal.aborted
+                    ? "OpenStreetMap request timed out"
+                    : "OpenStreetMap service is unavailable",
+                  controller.signal.aborted ? 504 : 503,
+                );
+          lastError = error;
+          if (!error.retryable) throw error;
         } finally {
-          reader.releaseLock();
+          clearTimeout(timeout);
         }
-        const bytes = Buffer.concat(chunks);
-        let parsed: any;
-        try {
-          parsed = JSON.parse(bytes.toString("utf8"));
-        } catch {
-          throw new OsmRequestError("OpenStreetMap returned invalid JSON", 502, false);
-        }
-        if (!parsed || typeof parsed !== "object") {
-          throw new OsmRequestError("OpenStreetMap returned an invalid response", 502, false);
-        }
-        if (typeof parsed.remark === "string" && parsed.remark.trim()) {
-          throw new OsmRequestError("Overpass could not complete the query. Please try again.");
-        }
-        return parsed;
-      } catch (cause) {
-        const error =
-          cause instanceof OsmRequestError
-            ? cause
-            : new OsmRequestError(
-                controller.signal.aborted
-                  ? "OpenStreetMap request timed out"
-                  : "OpenStreetMap service is unavailable",
-                controller.signal.aborted ? 504 : 503,
-              );
-        if (
-          !error.retryable ||
-          attempt + 1 >= this.policy.attempts ||
-          retryAfter >= deadline - Date.now()
-        )
-          throw error;
-      } finally {
-        clearTimeout(timeout);
+      }
+      if (attempt + 1 >= this.policy.attempts || retryAfter >= deadline - Date.now()) {
+        throw lastError ?? new OsmRequestError("OpenStreetMap service is unavailable");
       }
       await new Promise((resolve) => setTimeout(resolve, retryAfter));
     }
-    throw new OsmRequestError("OpenStreetMap service is unavailable");
+    throw lastError ?? new OsmRequestError("OpenStreetMap service is unavailable");
   }
 
   private async coalesce<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -251,7 +261,7 @@ export class OsmService {
     }
     return this.coalesce(key, async () => {
       const response = await this.fetchJson(
-        this.config.overpassUrl,
+        this.config.overpassUrls,
         {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
