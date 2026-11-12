@@ -276,6 +276,85 @@ describe("server game integrity", () => {
     expect(state.datasets).toEqual([]);
   });
 
+  it("starts an asynchronous POI import once and exposes loading, failure and retry across roles", async () => {
+    let finish!: (value: ReturnType<typeof turf.featureCollection>) => void;
+    let fail!: (error: Error) => void;
+    const mockOsm = {
+      subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([boundary])),
+      transit: vi
+        .fn()
+        .mockResolvedValue({
+          lines: turf.featureCollection([]),
+          stations: turf.featureCollection([]),
+        }),
+      pointsOfInterest: vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+          }),
+      ),
+    } as unknown as OsmService;
+    const { app, store } = await fixture(undefined, {}, { osm: mockOsm });
+    const { seeker, hider } = await createAndJoin(app);
+    const start = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/game/start?async=true",
+        headers: auth(seeker.token),
+        payload: { loadOsmPois: true },
+      });
+    expect((await start()).statusCode).toBe(202);
+    expect((await start()).statusCode).toBe(202);
+    expect(mockOsm.pointsOfInterest).toHaveBeenCalledTimes(1);
+    expect(store.getState(hider.token).game.osmLoadState.pois.status).toBe("LOADING");
+    fail(new OsmRequestError("Overpass unavailable"));
+    await vi.waitFor(() =>
+      expect(store.getState(hider.token).game.osmLoadState.pois.status).toBe("ERROR"),
+    );
+    expect(store.getState(seeker.token).game.phase).toBe("LOBBY");
+    expect(store.getState(seeker.token).datasets).toEqual([]);
+    expect((await start()).statusCode).toBe(202);
+    finish(turf.featureCollection([turf.point([16.3, 48.2], { name: "Museum" })]));
+    await vi.waitFor(() => expect(store.getState(hider.token).game.phase).toBe("HIDING"));
+    expect(store.getState(hider.token).game.osmLoadState.pois.status).toBe("LOADED");
+    expect(store.getState(hider.token).datasets).toHaveLength(1);
+  });
+
+  it("does not start another game when a delayed POI import finishes after a lobby reset", async () => {
+    let finish!: (value: ReturnType<typeof turf.featureCollection>) => void;
+    const mockOsm = {
+      subdivisions: vi.fn().mockResolvedValue(turf.featureCollection([boundary])),
+      transit: vi
+        .fn()
+        .mockResolvedValue({
+          lines: turf.featureCollection([]),
+          stations: turf.featureCollection([]),
+        }),
+      pointsOfInterest: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    } as unknown as OsmService;
+    const { app, store } = await fixture(undefined, {}, { osm: mockOsm });
+    const { seeker } = await createAndJoin(app);
+    await app.inject({
+      method: "POST",
+      url: "/api/game/start?async=true",
+      headers: auth(seeker.token),
+      payload: { loadOsmPois: true },
+    });
+    await app.inject({ method: "DELETE", url: "/api/game", headers: auth(seeker.token) });
+    const next = await createAndJoin(app);
+    finish(turf.featureCollection([turf.point([16.3, 48.2], { name: "Museum" })]));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(store.getState(next.seeker.token).game.phase).toBe("LOBBY");
+    expect(store.getState(next.seeker.token).datasets).toEqual([]);
+    expect(store.getState(next.seeker.token).game.osmLoadState.pois.status).toBe("IDLE");
+  });
+
   it("reuses optional library datasets in a later game", async () => {
     const { app } = await fixture();
     const upload = multipart({}, "Museums.kml", pointKml("Museum", 16.3));
@@ -1100,12 +1179,10 @@ describe("server game integrity", () => {
     const subdivisionData = turf.featureCollection([boundary]);
     const mockOsm = {
       subdivisions: vi.fn().mockRejectedValue(new OsmRequestError("Overpass unavailable")),
-      transit: vi
-        .fn()
-        .mockResolvedValue({
-          lines: turf.featureCollection([]),
-          stations: turf.featureCollection([]),
-        }),
+      transit: vi.fn().mockResolvedValue({
+        lines: turf.featureCollection([]),
+        stations: turf.featureCollection([]),
+      }),
     } as unknown as OsmService;
     const { app, store, database } = await fixture(undefined, {}, { osm: mockOsm });
     const { seeker, hider } = await createAndJoin(app);

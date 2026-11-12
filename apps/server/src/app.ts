@@ -238,36 +238,67 @@ export async function buildApp(
     broadcast();
     return reply.code(201).send(identity);
   });
-  app.post("/api/game/start", async (request) => {
+  const poiStarts = new Map<string, Promise<number>>();
+  app.post("/api/game/start", async (request, reply) => {
     const input = startGameSchema.parse(request.body ?? {});
     const token = bearer(request);
     store.requireSeeker(token);
     const state = store.getState(token);
-    if (state.game.phase !== "LOBBY") {
-      throw new DomainError("The game has already started", 409);
+    if (state.game.phase !== "LOBBY") throw new DomainError("The game has already started", 409);
+    if (!input.loadOsmPois) {
+      store.startGame(token);
+      store.setOsmLayerStatus(state.game.id, "pois", "IDLE");
+      broadcast();
+      return { ok: true, osmPois: 0 };
     }
-    if (input.loadOsmPois && state.datasets.length > 0) {
+    if (state.datasets.length > 0)
       throw new DomainError(
         "OpenStreetMap POIs can only be loaded when the game has no datasets",
         409,
       );
-    }
-    const poiDataset = input.loadOsmPois
-      ? await osm.pointsOfInterest(state.game.osm.boundingBox, state.game.boundary)
-      : null;
-    store.startGame(
-      token,
-      poiDataset
-        ? {
+    let pending = poiStarts.get(state.game.id);
+    if (!pending) {
+      store.setOsmLayerStatus(state.game.id, "pois", "LOADING");
+      broadcast();
+      pending = (async () => {
+        try {
+          const geojson = await osm.pointsOfInterest(
+            state.game.osm.boundingBox,
+            state.game.boundary,
+          );
+          // Revalidate the original session and lobby after the asynchronous import.
+          store.startGame(token, {
             name: "OpenStreetMap POIs",
             category: "OTHER",
             originalFilename: "openstreetmap-pois.geojson",
-            geojson: poiDataset,
+            geojson,
+          });
+          store.setOsmLayerStatus(state.game.id, "pois", "LOADED");
+          broadcast();
+          return geojson.features.length;
+        } catch (cause) {
+          const current = store.currentSummary();
+          if (current.game?.id === state.game.id && current.game.phase === "LOBBY") {
+            store.setOsmLayerStatus(
+              state.game.id,
+              "pois",
+              "ERROR",
+              cause instanceof Error ? cause.message : "Could not load POIs",
+            );
+            broadcast();
           }
-        : undefined,
-    );
-    broadcast();
-    return { ok: true, osmPois: poiDataset?.features.length ?? 0 };
+          throw cause;
+        }
+      })();
+      poiStarts.set(state.game.id, pending);
+      void pending.then(
+        () => poiStarts.delete(state.game.id),
+        () => poiStarts.delete(state.game.id),
+      );
+    }
+    if ((request.query as { async?: string }).async === "true")
+      return reply.code(202).send({ ok: true, loading: true });
+    return { ok: true, osmPois: await pending };
   });
   app.post("/api/game/end", async (request) => {
     store.endGame(bearer(request));
