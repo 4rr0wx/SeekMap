@@ -8,7 +8,7 @@ import type {
   SearchAreaResult,
   TransitMode,
 } from "@hideseek/shared";
-import { areaFeatureSchema, normalizeArea } from "@hideseek/shared";
+import { areaFeatureSchema, inferStationTransitModes, normalizeArea } from "@hideseek/shared";
 import type {
   Feature,
   FeatureCollection,
@@ -475,6 +475,61 @@ export class OsmService {
         stations.push(feature as Feature<Point>);
       }
     }
-    return { lines: turf.featureCollection(lines), stations: turf.featureCollection(stations) };
+    const enabledModes = new Set(modes);
+    const annotatedStations = stations.flatMap((station) => {
+      const railway =
+        typeof station.properties?.railway === "string" ? station.properties.railway : "";
+      const tagged = inferStationTransitModes(station.properties, { includeDefaultTrain: false });
+      const inferred = new Set<TransitMode>(tagged);
+      if (railway !== "tram_stop" && tagged.length === 0) {
+        let nearestMode: TransitMode | undefined;
+        let nearestDistanceMeters = Number.POSITIVE_INFINITY;
+        for (const line of lines) {
+          const lineMode = line.properties?.transitMode;
+          if (
+            lineMode !== "train" &&
+            lineMode !== "light_rail" &&
+            lineMode !== "subway" &&
+            lineMode !== "tram"
+          ) {
+            continue;
+          }
+          const segments =
+            line.geometry.type === "LineString"
+              ? [line as Feature<LineString>]
+              : line.geometry.coordinates.map((coordinates) =>
+                  turf.lineString(coordinates, line.properties ?? {}),
+                );
+          for (const segment of segments) {
+            const distanceMeters = turf.pointToLineDistance(station, segment, {
+              units: "meters",
+            });
+            if (distanceMeters < nearestDistanceMeters) {
+              nearestDistanceMeters = distanceMeters;
+              nearestMode = lineMode;
+            }
+          }
+        }
+        // Untagged station/halt nodes inherit the nearest imported way mode when close.
+        if (nearestMode && nearestDistanceMeters <= 150) inferred.add(nearestMode);
+        else if (railway === "station" || railway === "halt") inferred.add("train");
+      }
+      const transitModes = [...inferred].filter((mode) => enabledModes.has(mode));
+      if (transitModes.length === 0) return [];
+      return [
+        {
+          ...station,
+          properties: {
+            ...(station.properties ?? {}),
+            transitModes,
+            transitMode: transitModes[0],
+          },
+        } as Feature<Point>,
+      ];
+    });
+    return {
+      lines: turf.featureCollection(lines),
+      stations: turf.featureCollection(annotatedStations),
+    };
   }
 }

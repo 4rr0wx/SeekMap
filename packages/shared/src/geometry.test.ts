@@ -434,8 +434,9 @@ describe("area geometry", () => {
 
   it("builds Matching and Measuring transit-station effects and rejects missing transit", () => {
     const stations = turf.featureCollection([
-      turf.point([0.4, 1], { name: "Westbahnhof" }),
-      turf.point([1.6, 1], { name: "Ostbahnhof" }),
+      turf.point([0.4, 1], { name: "Westbahnhof", railway: "station", station: "subway" }),
+      turf.point([1.6, 1], { name: "Ostbahnhof", railway: "station", station: "subway" }),
+      turf.point([1, 1.5], { name: "Tram Halt", railway: "tram_stop" }),
     ]);
     const lines = turf.featureCollection([
       turf.lineString(
@@ -515,8 +516,8 @@ describe("area geometry", () => {
       ],
     ]) as AreaFeature;
     const multiStations = turf.featureCollection([
-      turf.point([0.5, 0.5], { name: "Central" }),
-      turf.point([3.5, 0.5], { name: "East Island" }),
+      turf.point([0.5, 0.5], { name: "Central", railway: "station", station: "subway" }),
+      turf.point([3.5, 0.5], { name: "East Island", railway: "station", station: "subway" }),
     ]);
     const multiSame = buildQuestionArtifacts(
       "matching.transit-station",
@@ -536,6 +537,20 @@ describe("area geometry", () => {
       false,
     );
 
+    // Subway-only games must ignore tram stops even when they are nearer.
+    const subwayOnlyNearTram = buildQuestionArtifacts(
+      "matching.transit-station",
+      { referencePoint: [1, 1.4] },
+      "SAME",
+      context,
+    ).artifacts;
+    expect(
+      subwayOnlyNearTram.visualization?.type === "FeatureCollection" &&
+        subwayOnlyNearTram.visualization.features.some(
+          (feature) => feature.properties?.seekerPlaceName === "Tram Halt",
+        ),
+    ).toBe(false);
+
     expect(() =>
       buildQuestionArtifacts("matching.transit-station", parameters, "SAME", {
         boundary,
@@ -543,7 +558,7 @@ describe("area geometry", () => {
         datasets: [],
         transitStations: null,
       }),
-    ).toThrow(/No transit stations are available/);
+    ).toThrow(/No transit stations/);
 
     expect(() =>
       buildQuestionArtifacts("measuring.transit-station", parameters, "CLOSER", {
@@ -552,7 +567,17 @@ describe("area geometry", () => {
         datasets: [],
         transitStations: turf.featureCollection([]),
       }),
-    ).toThrow(/No transit stations are available/);
+    ).toThrow(/No transit stations/);
+
+    expect(() =>
+      buildQuestionArtifacts("matching.transit-station", { referencePoint: [1, 1.4] }, "SAME", {
+        ...context,
+        transitModes: ["tram"],
+        transitStations: turf.featureCollection([
+          turf.point([0.4, 1], { name: "Westbahnhof", railway: "station", station: "subway" }),
+        ]),
+      }),
+    ).toThrow(/enabled modes/);
 
     const pendingLine = buildQuestionArtifacts(
       "matching.transit-line",
@@ -562,6 +587,14 @@ describe("area geometry", () => {
     ).artifacts;
     expect(pendingLine.effect).toBeNull();
     expect(getQuestionDefinition("matching.transit-line").exactRulePending).toBe(true);
+
+    const answeredPending = buildQuestionArtifacts(
+      "matching.transit-line",
+      parameters,
+      "SAME",
+      context,
+    ).artifacts;
+    expect(answeredPending.effect).toBeNull();
   });
 
   it("builds Tentacles Voronoi cells, radius exclusion, and local Hider evaluation", () => {

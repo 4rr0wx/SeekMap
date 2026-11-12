@@ -931,13 +931,15 @@ export class GameStore {
         403,
       );
     }
+    const definition = getQuestionDefinition(row.definitionId);
     const built = this.buildArtifactsOrThrow(
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
       game.id,
     );
-    if (!built.artifacts.effect) {
+    // Tracking-only definitions (exactRulePending) record the answer without an area effect.
+    if (!built.artifacts.effect && !definition.exactRulePending) {
       throw new DomainError("This answer does not produce a usable area effect", 409);
     }
     const timestamp = now();
@@ -949,7 +951,7 @@ export class GameStore {
         visualizationGeojson: built.artifacts.visualization
           ? encode(built.artifacts.visualization)
           : null,
-        effectGeojson: encode(built.artifacts.effect),
+        effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
         answeredAt: timestamp,
         updatedAt: timestamp,
       })
@@ -970,13 +972,14 @@ export class GameStore {
     if (row.status !== "ANSWERED" && row.status !== "APPLIED") {
       throw new DomainError("Only a recorded answer can be corrected", 409);
     }
+    const definition = getQuestionDefinition(row.definitionId);
     const built = this.buildArtifactsOrThrow(
       row.definitionId,
       decode<Record<string, unknown>>(row.parametersJson)!,
       answer,
       player.gameId,
     );
-    if (!built.artifacts.effect) {
+    if (!built.artifacts.effect && !definition.exactRulePending) {
       throw new DomainError("This answer does not produce a usable area effect", 409);
     }
     const timestamp = now();
@@ -987,7 +990,7 @@ export class GameStore {
           visualizationGeojson: built.artifacts.visualization
             ? encode(built.artifacts.visualization)
             : null,
-          effectGeojson: encode(built.artifacts.effect),
+          effectGeojson: built.artifacts.effect ? encode(built.artifacts.effect) : null,
           answeredAt: timestamp,
           updatedAt: timestamp,
         })
@@ -1019,6 +1022,7 @@ export class GameStore {
       throw new DomainError("Answer the question before applying it", 409);
     const answer = decode<string>(row.answerJson);
     if (!answer) throw new DomainError("Answer the question before applying it", 409);
+    const definition = getQuestionDefinition(row.definitionId);
     const existingEffect = decode<GeometryEffect>(row.effectGeojson);
     // Keep the effect recorded at answer time so a later dataset replace cannot
     // reinterpret place indexes. Only rebuild when the answer never produced one
@@ -1032,13 +1036,13 @@ export class GameStore {
         answer,
         player.gameId,
       );
-      if (!built.artifacts.effect) {
+      if (!built.artifacts.effect && !definition.exactRulePending) {
         throw new DomainError("This answer does not produce a usable area effect", 409);
       }
       visualizationGeojson = built.artifacts.visualization
         ? encode(built.artifacts.visualization)
         : null;
-      effectGeojson = encode(built.artifacts.effect);
+      effectGeojson = built.artifacts.effect ? encode(built.artifacts.effect) : null;
     }
     const timestamp = now();
     this.db.transaction((tx) => {

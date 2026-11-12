@@ -663,7 +663,9 @@ export function QuestionActivitySidebar({
               )}
               {question.status === "ANSWERED" && state.me.role === "SEEKER" && (
                 <p className="apply-notice">
-                  The answer area is previewed on the map. Apply it to update Possible Area.
+                  {definition.exactRulePending
+                    ? "Tracking only: the answer is recorded, but this question does not change Possible Area yet."
+                    : "The answer area is previewed on the map. Apply it to update Possible Area."}
                 </p>
               )}
               {question.status === "PENDING" && !canAnswer && (
@@ -708,7 +710,8 @@ export function QuestionActivitySidebar({
                     disabled={busyId === question.id}
                     onClick={() => void action(question, "apply")}
                   >
-                    <Check size={17} /> Apply to Possible Area
+                    <Check size={17} />{" "}
+                    {definition.exactRulePending ? "Mark applied" : "Apply to Possible Area"}
                   </button>
                 )}
               </div>

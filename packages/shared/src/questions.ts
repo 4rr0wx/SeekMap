@@ -36,8 +36,8 @@ import {
 } from "./place-questions.js";
 import {
   hasTransitLines,
-  hasTransitStations,
   requireTransitStations,
+  transitStationsAsPlaces,
   transitStationVisualizationFeatures,
 } from "./transit-questions.js";
 import type {
@@ -403,12 +403,16 @@ const matchingTransitStation: QuestionDefinition<z.infer<typeof transitQuestionP
     baseCost: 1,
     repeatRule: { type: "LINEAR", increment: 1 },
     buildArtifacts(parameters, answer, context) {
-      const places = requireTransitStations(context.transitStations, context.boundary);
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
       const features = transitStationVisualizationFeatures(places, parameters.referencePoint);
       const selected = nearestDatasetPlace(places, parameters.referencePoint, "webMercator");
       if (!selected) {
         throw new Error(
-          "No transit stations are available inside the game boundary. Load transit data before asking this question.",
+          "No transit stations for the enabled modes are available inside the game boundary. Load transit data or enable matching modes before asking this question.",
         );
       }
       const sameRegion = matchingPlaceRegion(context.boundary, places, selected);
@@ -453,7 +457,11 @@ const measuringTransitStation: QuestionDefinition<z.infer<typeof transitQuestion
     baseCost: 1,
     repeatRule: { type: "LINEAR", increment: 1 },
     buildArtifacts(parameters, answer, context) {
-      const places = requireTransitStations(context.transitStations, context.boundary);
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
       const features = transitStationVisualizationFeatures(places, parameters.referencePoint);
       const closer = measuringPlaceRegion(
         context.boundary,
@@ -658,10 +666,13 @@ export const QUESTION_DEFINITIONS: readonly QuestionDefinition[] = [
 /** Whether a transit-backed definition should appear in the composer for the current game. */
 export function isTransitQuestionAvailable(
   definitionId: string,
-  context: Pick<QuestionContext, "transitStations" | "transitLines">,
+  context: Pick<QuestionContext, "boundary" | "transitStations" | "transitLines" | "transitModes">,
 ): boolean {
   if (definitionId === "matching.transit-station" || definitionId === "measuring.transit-station") {
-    return hasTransitStations(context.transitStations);
+    return (
+      transitStationsAsPlaces(context.transitStations, context.boundary, context.transitModes)
+        .length > 0
+    );
   }
   if (definitionId === "matching.transit-line") {
     return hasTransitLines(context.transitLines);
@@ -712,7 +723,11 @@ export function getQuestionReferenceInfo(
       definitionId === "matching.transit-station" ||
       definitionId === "measuring.transit-station"
     ) {
-      const places = requireTransitStations(context.transitStations, context.boundary);
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
       const metric = definitionId === "matching.transit-station" ? "webMercator" : "geodesic";
       const seeker = nearestDatasetPlace(
         places,
@@ -880,7 +895,11 @@ export function evaluateQuestionAtPosition(
     };
   }
   if (definitionId === "matching.transit-station" || definitionId === "measuring.transit-station") {
-    const places = requireTransitStations(context.transitStations, context.boundary);
+    const places = requireTransitStations(
+      context.transitStations,
+      context.boundary,
+      context.transitModes,
+    );
     const metric = definitionId === "matching.transit-station" ? "webMercator" : "geodesic";
     const seeker = nearestDatasetPlace(
       places,

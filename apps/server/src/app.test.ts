@@ -599,8 +599,26 @@ describe("server game integrity", () => {
       ),
     ]);
     const mockTransitStations = turf.featureCollection([
-      turf.point([16.27, 48.2], { name: "Westbahnhof" }),
-      turf.point([16.53, 48.2], { name: "Landstraße" }),
+      turf.point([16.27, 48.2], {
+        name: "Westbahnhof",
+        railway: "station",
+        station: "subway",
+        transitMode: "subway",
+        transitModes: ["subway"],
+      }),
+      turf.point([16.53, 48.2], {
+        name: "Landstraße",
+        railway: "station",
+        station: "subway",
+        transitMode: "subway",
+        transitModes: ["subway"],
+      }),
+      turf.point([16.4, 48.2], {
+        name: "Oper",
+        railway: "tram_stop",
+        transitMode: "tram",
+        transitModes: ["tram"],
+      }),
     ]);
     const mockOsm = {
       searchAreas: vi.fn(),
@@ -628,7 +646,7 @@ describe("server game integrity", () => {
         },
         boundary,
         firstDivisionAdminLevel: null,
-        transitModes: ["subway", "tram"],
+        transitModes: ["subway"],
       },
     });
     expect(created.statusCode).toBe(201);
@@ -650,7 +668,8 @@ describe("server game integrity", () => {
     const stateWithTransit = (
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
     ).json<GameState>();
-    expect(stateWithTransit.game.transitStations?.features).toHaveLength(2);
+    expect(stateWithTransit.game.transitStations?.features).toHaveLength(3);
+    expect(stateWithTransit.game.transitModes).toEqual(["subway"]);
     expect(
       stateWithTransit.questionConfigs.some(
         (config) => config.definitionId === "matching.transit-station" && config.enabled,
@@ -663,7 +682,7 @@ describe("server game integrity", () => {
       headers: auth(seeker.token),
       payload: {
         definitionId: "matching.transit-station",
-        parameters: { referencePoint: [16.26, 48.2] },
+        parameters: { referencePoint: [16.5, 48.2] },
       },
     });
     expect(draft.statusCode).toBe(201);
@@ -682,9 +701,16 @@ describe("server game integrity", () => {
     const hiderState = (
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(hider.token) })
     ).json<GameState>();
-    expect(hiderState.questions[0]?.parameters).toEqual({ referencePoint: [16.26, 48.2] });
+    expect(hiderState.questions[0]?.parameters).toEqual({ referencePoint: [16.5, 48.2] });
     expect(JSON.stringify(hiderState)).not.toContain("hiderLocation");
     expect(JSON.stringify(hiderState.questions[0]?.parameters)).not.toMatch(/48\.\d+,\s*16\./);
+    // Nearest geographic stop is the tram at 16.4, but subway-only mode must use Landstraße.
+    expect(
+      hiderState.questions[0]?.visualization?.type === "FeatureCollection" &&
+        hiderState.questions[0].visualization.features.some(
+          (feature) => feature.properties?.seekerPlaceName === "Landstraße",
+        ),
+    ).toBe(true);
 
     expect(
       (
@@ -722,6 +748,62 @@ describe("server game integrity", () => {
       },
     });
     expect(measuringDraft.statusCode).toBe(201);
+
+    const lineDraft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "matching.transit-line",
+        parameters: { referencePoint: [16.26, 48.2] },
+      },
+    });
+    expect(lineDraft.statusCode).toBe(201);
+    const lineQuestionId = lineDraft.json<{ id: string }>().id;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${lineQuestionId}/ask`,
+          headers: auth(seeker.token),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${lineQuestionId}/answer`,
+          headers: auth(hider.token),
+          payload: { answer: "SAME" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const lineAnswered = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    const lineQuestion = lineAnswered.questions.find((item) => item.id === lineQuestionId);
+    expect(lineQuestion?.status).toBe("ANSWERED");
+    expect(lineQuestion?.effect).toBeNull();
+    const areaBeforeLineApply = turf.area(lineAnswered.game.possibleArea!);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${lineQuestionId}/apply`,
+          headers: auth(seeker.token),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(200);
+    const lineApplied = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(lineApplied.questions.find((item) => item.id === lineQuestionId)?.status).toBe(
+      "APPLIED",
+    );
+    expect(turf.area(lineApplied.game.possibleArea!)).toBeCloseTo(areaBeforeLineApply, 5);
 
     const { app: bareApp } = await fixture();
     const bare = await createAndJoin(bareApp);
