@@ -21,6 +21,7 @@ import type {
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/database.js";
 import { osmCache } from "../db/schema.js";
+import { DomainError } from "../store.js";
 
 function cacheKey(kind: string, payload: string): string {
   return `${kind}:${createHash("sha256").update(payload).digest("hex")}`;
@@ -30,11 +31,46 @@ function jsonText<T>(value: T): string {
   return JSON.stringify(value);
 }
 
+const TRANSIENT_OSM_STATUSES = new Set([429, 502, 503, 504]);
+const DEFAULT_OSM_ATTEMPTS = 3;
+
+export type OsmServiceOptions = {
+  /** Override backoff between retry attempts (tests use 0). */
+  retryDelayMs?: (attempt: number) => number;
+  /** Maximum attempts across the Overpass URL list. */
+  maxAttempts?: number;
+};
+
+function isTransientOsmError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.message === "OpenStreetMap request timed out") return true;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  if (error.message === "fetch failed" || error.message.includes("ECONNRESET")) return true;
+  const statusMatch = error.message.match(/OpenStreetMap service returned (\d+)/);
+  if (statusMatch) {
+    const status = Number.parseInt(statusMatch[1]!, 10);
+    return TRANSIENT_OSM_STATUSES.has(status);
+  }
+  return false;
+}
+
 export class OsmService {
+  private readonly retryDelayMs: (attempt: number) => number;
+  private readonly maxAttempts: number;
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
-  ) {}
+    options: OsmServiceOptions = {},
+  ) {
+    this.retryDelayMs = options.retryDelayMs ?? ((attempt) => Math.min(400 * 2 ** attempt, 4_000));
+    this.maxAttempts = options.maxAttempts ?? DEFAULT_OSM_ATTEMPTS;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
 
   private async fetchJson(url: string, init: RequestInit, maxBytes: number): Promise<any> {
     const controller = new AbortController();
@@ -60,6 +96,32 @@ export class OsmService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async fetchJsonResilient(
+    urls: string[],
+    init: RequestInit,
+    maxBytes: number,
+  ): Promise<any> {
+    const endpoints = urls.length > 0 ? urls : [this.config.overpassUrl];
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < this.maxAttempts; attempt += 1) {
+      for (const url of endpoints) {
+        try {
+          return await this.fetchJson(url, init, maxBytes);
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          if (!isTransientOsmError(error)) throw lastError;
+        }
+      }
+      if (attempt < this.maxAttempts - 1) {
+        await this.sleep(this.retryDelayMs(attempt));
+      }
+    }
+    throw new DomainError(
+      lastError?.message ?? "OpenStreetMap service is temporarily unavailable",
+      502,
+    );
   }
 
   private getCached<T>(key: string): T | null {
@@ -94,7 +156,11 @@ export class OsmService {
     url.searchParams.set("addressdetails", "1");
     url.searchParams.set("extratags", "1");
     url.searchParams.set("limit", "8");
-    const result = await this.fetchJson(url.toString(), { method: "GET" }, 12 * 1024 * 1024);
+    const result = await this.fetchJsonResilient(
+      [url.toString()],
+      { method: "GET" },
+      12 * 1024 * 1024,
+    );
     const candidates = (result.features ?? [])
       .map((feature: any): SearchAreaResult | null => {
         if (!feature.geometry || !["Polygon", "MultiPolygon"].includes(feature.geometry.type))
@@ -139,8 +205,8 @@ export class OsmService {
       const cached = this.getCached<any>(key);
       if (cached) return cached;
     }
-    const response = await this.fetchJson(
-      this.config.overpassUrl,
+    const response = await this.fetchJsonResilient(
+      this.config.overpassUrls,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },

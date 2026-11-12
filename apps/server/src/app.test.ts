@@ -28,7 +28,12 @@ async function fixture(
     ...environment,
   });
   const database = openDatabase(config.databasePath);
-  const built = await buildApp(config, database, services);
+  const built = await buildApp(config, database, {
+    ...services,
+    osm:
+      services?.osm ??
+      new OsmService(database.db, config, { retryDelayMs: () => 0, maxAttempts: 3 }),
+  });
   cleanups.push(async () => {
     built.stopTimer();
     built.io.close();
@@ -257,7 +262,7 @@ describe("server game integrity", () => {
       payload: { loadOsmPois: true },
     });
 
-    expect(started.statusCode).toBe(500);
+    expect(started.statusCode).toBe(502);
     expect(started.json<{ error: string }>().error).toContain("OpenStreetMap service returned 504");
     const state = (
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
