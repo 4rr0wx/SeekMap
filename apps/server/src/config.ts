@@ -5,6 +5,18 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/$/, "");
+}
+
+function parseUrlList(value: string | undefined, fallback: string): string[] {
+  const raw = (value ?? fallback)
+    .split(",")
+    .map((entry) => stripTrailingSlash(entry.trim()))
+    .filter(Boolean);
+  return [...new Set(raw.length > 0 ? raw : [stripTrailingSlash(fallback)])];
+}
+
 export interface AppConfig {
   port: number;
   host: string;
@@ -12,7 +24,10 @@ export interface AppConfig {
   dataDirectory: string;
   databasePath: string;
   nominatimUrl: string;
+  /** Primary Overpass interpreter URL (first entry of overpassUrls). */
   overpassUrl: string;
+  /** Overpass interpreter URLs tried in order on transient failures. */
+  overpassUrls: string[];
   tileUrl: string;
   tileAttribution: string;
   maxUploadBytes: number;
@@ -21,20 +36,19 @@ export interface AppConfig {
 
 export function loadConfig(environment = process.env): AppConfig {
   const dataDirectory = resolve(environment.DATA_DIR ?? "./data");
+  const overpassSource = environment.OVERPASS_URLS?.trim() || environment.OVERPASS_URL || undefined;
+  const overpassUrls = parseUrlList(overpassSource, "https://overpass-api.de/api/interpreter");
   return {
     port: positiveInt(environment.PORT, 3000),
     host: environment.HOST ?? "0.0.0.0",
     publicUrl: environment.PUBLIC_APP_URL || null,
     dataDirectory,
     databasePath: resolve(dataDirectory, "hideseek-atlas.sqlite"),
-    nominatimUrl: (environment.NOMINATIM_URL ?? "https://nominatim.openstreetmap.org").replace(
-      /\/$/,
-      "",
+    nominatimUrl: stripTrailingSlash(
+      environment.NOMINATIM_URL ?? "https://nominatim.openstreetmap.org",
     ),
-    overpassUrl: (environment.OVERPASS_URL ?? "https://overpass-api.de/api/interpreter").replace(
-      /\/$/,
-      "",
-    ),
+    overpassUrl: overpassUrls[0]!,
+    overpassUrls,
     tileUrl: environment.OSM_TILE_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     tileAttribution:
       environment.OSM_TILE_ATTRIBUTION ??

@@ -54,20 +54,21 @@ Authentication is deliberately outside the application; protect the entire origi
 
 ## Environment variables
 
-| Variable               | Default                   | Purpose                                                   |
-| ---------------------- | ------------------------- | --------------------------------------------------------- |
-| `PORT`                 | `3000`                    | Application HTTP port.                                    |
-| `HOST`                 | `0.0.0.0`                 | Listen address.                                           |
-| `PUBLIC_APP_URL`       | empty                     | Public HTTPS URL, used in the OSM User-Agent description. |
-| `DATA_DIR`             | `/data` in Docker         | Directory containing the SQLite database.                 |
-| `NOMINATIM_URL`        | public Nominatim          | Administrative area search endpoint.                      |
-| `OVERPASS_URL`         | public Overpass API       | Subdivision and transit query endpoint.                   |
-| `OSM_TILE_URL`         | public OSM raster tiles   | MapLibre raster tile template.                            |
-| `OSM_TILE_ATTRIBUTION` | OpenStreetMap attribution | Required map attribution.                                 |
-| `MAX_KML_BYTES`        | `5242880`                 | Maximum KML/KMZ upload size.                              |
-| `LOG_LEVEL`            | `info`                    | Fastify/Pino log level. Request bodies are not logged.    |
+| Variable               | Default                        | Purpose                                                   |
+| ---------------------- | ------------------------------ | --------------------------------------------------------- |
+| `PORT`                 | `3000`                         | Application HTTP port.                                    |
+| `HOST`                 | `0.0.0.0`                      | Listen address.                                           |
+| `PUBLIC_APP_URL`       | empty                          | Public HTTPS URL, used in the OSM User-Agent description. |
+| `DATA_DIR`             | `/data` in Docker              | Directory containing the SQLite database.                 |
+| `NOMINATIM_URL`        | public Nominatim               | Administrative area search endpoint.                      |
+| `OVERPASS_URL`         | public Overpass API            | Primary subdivision and transit query endpoint.           |
+| `OVERPASS_URLS`        | (falls back to `OVERPASS_URL`) | Optional comma-separated Overpass mirrors for retries.    |
+| `OSM_TILE_URL`         | public OSM raster tiles        | MapLibre raster tile template.                            |
+| `OSM_TILE_ATTRIBUTION` | OpenStreetMap attribution      | Required map attribution.                                 |
+| `MAX_KML_BYTES`        | `5242880`                      | Maximum KML/KMZ upload size.                              |
+| `LOG_LEVEL`            | `info`                         | Fastify/Pino log level. Request bodies are not logged.    |
 
-Public OSM infrastructure has usage policies and finite capacity. For regular or larger games, configure endpoints you operate or are permitted to use. Boundary, subdivision, and transit responses are cached in SQLite, and selected game geometry is copied into game state so a running game remains usable during an Overpass outage.
+Public OSM infrastructure has usage policies and finite capacity. For regular or larger games, configure endpoints you operate or are permitted to use. Transient Overpass failures (429/502/503/504 and timeouts) are retried with backoff and optional `OVERPASS_URLS` mirrors before the API returns 502. Boundary, subdivision, and transit responses are cached in SQLite, and selected game geometry is copied into game state so a running game remains usable during an Overpass outage.
 
 ## Persistent data and backups
 

@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config";
 import { openDatabase } from "../db/database";
+import { DomainError } from "../store";
 import { OsmService } from "./osm";
 
 afterEach(() => vi.unstubAllGlobals());
+
+function serviceWithFastRetries(database: ReturnType<typeof openDatabase>["db"], env = {}) {
+  return new OsmService(database, loadConfig(env as NodeJS.ProcessEnv), {
+    retryDelayMs: () => 0,
+    maxAttempts: 3,
+  });
+}
 
 describe("OSM transit normalization", () => {
   it("builds a named, in-boundary POI dataset without caching it beyond the game", async () => {
@@ -219,6 +227,102 @@ describe("OSM transit normalization", () => {
 
       const lightRailLine = result.lines.features.find((f) => f.properties?.name === "S45");
       expect(lightRailLine?.properties?.transitMode).toBe("light_rail");
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("retries transient Overpass 504 responses and succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("gateway timeout", { status: 504 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            version: 0.6,
+            elements: [
+              {
+                type: "way",
+                id: 2,
+                nodes: [10, 11],
+                geometry: [
+                  { lat: 48.2, lon: 16.3 },
+                  { lat: 48.21, lon: 16.31 },
+                ],
+                tags: { name: "Main line", railway: "rail" },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = serviceWithFastRetries(database.db);
+      const result = await service.transit([16.2, 48.1, 16.4, 48.3], ["train"]);
+      expect(result.lines.features).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("fails over to the next Overpass URL after a transient error", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("primary.example")) {
+        return new Response("gateway timeout", { status: 504 });
+      }
+      return new Response(
+        JSON.stringify({
+          version: 0.6,
+          elements: [
+            {
+              type: "way",
+              id: 2,
+              nodes: [10, 11],
+              geometry: [
+                { lat: 48.2, lon: 16.3 },
+                { lat: 48.21, lon: 16.31 },
+              ],
+              tags: { name: "Main line", railway: "rail" },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = serviceWithFastRetries(database.db, {
+        OVERPASS_URLS:
+          "https://primary.example/api/interpreter,https://secondary.example/api/interpreter",
+      });
+      const result = await service.transit([16.2, 48.1, 16.4, 48.3], ["train"]);
+      expect(result.lines.features).toHaveLength(1);
+      expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+        "https://primary.example/api/interpreter",
+        "https://secondary.example/api/interpreter",
+      ]);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("surfaces exhausted Overpass failures as a 502 DomainError", async () => {
+    const fetchMock = vi.fn(async () => new Response("gateway timeout", { status: 504 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = serviceWithFastRetries(database.db);
+      const rejection = service.transit([16.2, 48.1, 16.4, 48.3], ["train"]);
+      await expect(rejection).rejects.toBeInstanceOf(DomainError);
+      await expect(rejection).rejects.toMatchObject({
+        message: "OpenStreetMap service returned 504",
+        statusCode: 502,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       database.sqlite.close();
     }
