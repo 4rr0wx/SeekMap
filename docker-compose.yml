@@ -17,7 +17,7 @@ services:
       MAX_KML_BYTES: ${MAX_KML_BYTES:-5242880}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "${PORT:-3050}:${PORT:-3050}"
     volumes:
       - hideseek_data:/data
     healthcheck:
