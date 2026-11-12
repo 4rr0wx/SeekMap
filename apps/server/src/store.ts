@@ -1014,25 +1014,34 @@ export class GameStore {
       throw new DomainError("Answer the question before applying it", 409);
     const answer = decode<string>(row.answerJson);
     if (!answer) throw new DomainError("Answer the question before applying it", 409);
-    // Rebuild so late-loaded subdivisions/datasets still produce a real effect.
-    const built = this.buildArtifactsOrThrow(
-      row.definitionId,
-      decode<Record<string, unknown>>(row.parametersJson)!,
-      answer,
-      player.gameId,
-    );
-    if (!built.artifacts.effect) {
-      throw new DomainError("This answer does not produce a usable area effect", 409);
+    const existingEffect = decode<GeometryEffect>(row.effectGeojson);
+    // Keep the effect recorded at answer time so a later dataset replace cannot
+    // reinterpret place indexes. Only rebuild when the answer never produced one
+    // (e.g. First Division answered before subdivisions finished loading).
+    let visualizationGeojson = row.visualizationGeojson;
+    let effectGeojson = row.effectGeojson;
+    if (!existingEffect) {
+      const built = this.buildArtifactsOrThrow(
+        row.definitionId,
+        decode<Record<string, unknown>>(row.parametersJson)!,
+        answer,
+        player.gameId,
+      );
+      if (!built.artifacts.effect) {
+        throw new DomainError("This answer does not produce a usable area effect", 409);
+      }
+      visualizationGeojson = built.artifacts.visualization
+        ? encode(built.artifacts.visualization)
+        : null;
+      effectGeojson = encode(built.artifacts.effect);
     }
     const timestamp = now();
     this.db.transaction((tx) => {
       tx.update(questions)
         .set({
           status: "APPLIED",
-          visualizationGeojson: built.artifacts.visualization
-            ? encode(built.artifacts.visualization)
-            : null,
-          effectGeojson: encode(built.artifacts.effect),
+          visualizationGeojson,
+          effectGeojson,
           appliedAt: timestamp,
           updatedAt: timestamp,
         })

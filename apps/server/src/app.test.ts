@@ -659,6 +659,95 @@ describe("server game integrity", () => {
     expect(turf.area(applied.game.possibleArea!)).toBeLessThan(originalArea);
   });
 
+  it("applies the effect recorded at answer time even if the dataset is replaced later", async () => {
+    const { app } = await fixture();
+    const { seeker, hider } = await createAndJoin(app);
+    const zooKml = `<?xml version="1.0"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>Tiergarten Schönbrunn</name><Point><coordinates>16.30,48.18</coordinates></Point></Placemark>
+<Placemark><name>Haus des Meeres</name><Point><coordinates>16.35,48.20</coordinates></Point></Placemark>
+</Document></kml>`;
+    const upload = multipart(
+      { name: "Zoos and Aquariums", category: "TENTACLES" },
+      "zoos.kml",
+      zooKml,
+    );
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/datasets",
+      headers: { ...auth(seeker.token), "content-type": upload.contentType },
+      payload: upload.body,
+    });
+    const datasetId = uploaded.json<{ id: string }>().id;
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/questions",
+      headers: auth(seeker.token),
+      payload: {
+        definitionId: "tentacles.dataset",
+        parameters: { referencePoint: [16.32, 48.19], radiusMeters: 5_000, datasetId },
+      },
+    });
+    const questionId = draft.json<{ id: string }>().id;
+    await app.inject({
+      method: "POST",
+      url: `/api/questions/${questionId}/ask`,
+      headers: auth(seeker.token),
+      payload: {},
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${questionId}/answer`,
+          headers: auth(hider.token),
+          payload: { answer: "place:0" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const answered = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    const recordedEffect = answered.questions[0]?.effect;
+    expect(recordedEffect).not.toBeNull();
+
+    const replacement = multipart(
+      {},
+      "replacement.kml",
+      `<?xml version="1.0"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>Different West</name><Point><coordinates>16.25,48.12</coordinates></Point></Placemark>
+<Placemark><name>Different East</name><Point><coordinates>16.55,48.30</coordinates></Point></Placemark>
+</Document></kml>`,
+    );
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: `/api/datasets/${datasetId}/content`,
+          headers: { ...auth(seeker.token), "content-type": replacement.contentType },
+          payload: replacement.body,
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/questions/${questionId}/apply`,
+          headers: auth(seeker.token),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(200);
+    const applied = (
+      await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
+    ).json<GameState>();
+    expect(applied.questions[0]?.effect).toEqual(recordedEffect);
+    expect(applied.game.possibleArea).toEqual(recordedEffect!.geometry);
+  });
+
   it("hides drafts from Hiders and tracks repeat usage costs", async () => {
     const { app } = await fixture();
     const { seeker, hider } = await createAndJoin(app, true);
