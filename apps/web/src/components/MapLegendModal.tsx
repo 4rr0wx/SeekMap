@@ -95,6 +95,10 @@ export function MapLegendModal({ onClose, onOpenLayers }: Props) {
           ))}
         </div>
 
+        <p className="legend-subtitle">
+          Blue named markers show Seekers who explicitly share their live position. They expire
+          after 60 seconds without an update and are separate from Seeker notes.
+        </p>
         <div className="legend-footer">
           {onOpenLayers && (
             <button type="button" className="button secondary wide" onClick={onOpenLayers}>

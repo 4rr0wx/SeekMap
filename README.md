@@ -139,6 +139,8 @@ REST mutations persist first and increment a game revision; Socket.IO broadcasts
 
 Hider GPS is local React state rendered directly into the Hider's map source. There is no REST schema, WebSocket event, database field, or logging path for that coordinate. Hider answer payloads are strict and accept only an answer value. DRAFT questions are omitted from Hider snapshots, PENDING questions are omitted when Assistance is off, and Seeker markers are never serialized into a Hider response.
 
+Seekers can opt in to sharing their position with all authenticated players from the Players & game panel. These positions use a separate Seeker-only REST mutation, are held only in process memory, expire after 60 seconds, and are cleared on Stop sharing, End Game, Reset, or server restart. They are independent of Seeker-only investigation markers. The browser polls this lightweight endpoint instead of sending location WebSocket events or fetching the entire game for each GPS update. Hider devices only read shared Seeker positions; their own GPS remains local. Mobile browsers may suspend GPS in the background, so shared positions are not guaranteed continuous tracking.
+
 This is not an application authentication system. Device tokens exist only to select the correct role-filtered view; put authentication at the reverse proxy as intended.
 
 ## Known limitations

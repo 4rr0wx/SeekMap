@@ -1651,3 +1651,31 @@ textarea:focus {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+
+.seeker-location-marker {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+}
+.seeker-location-dot {
+  width: 16px;
+  height: 16px;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 1px 6px #0006;
+}
+.seeker-location-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: white;
+  background: #1743a5;
+  font: 600 12px/1.2 sans-serif;
+  box-shadow: 0 1px 6px #0004;
+}
