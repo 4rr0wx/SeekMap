@@ -70,6 +70,8 @@ Authentication is deliberately outside the application; protect the entire origi
 
 Public OSM infrastructure has usage policies and finite capacity. For regular or larger games, configure endpoints you operate or are permitted to use. Transient Overpass failures (429/502/503/504 and timeouts) are retried with backoff and optional `OVERPASS_URLS` mirrors before the API returns 502. Boundary, subdivision, and transit responses are cached in SQLite, and selected game geometry is copied into game state so a running game remains usable during an Overpass outage.
 
+OSM requests retry transient failures up to three times within a 60-second budget and respect `Retry-After`. Identical in-flight queries are shared. Partial Overpass responses are rejected before caching. Each layer exposes its loading/error status to all players; failed reloads keep existing geometry, and interrupted loads can be retried after a server restart.
+
 ## Persistent data and backups
 
 Compose stores `/data/hideseek-atlas.sqlite` in the `hideseek_data` named volume. SQLite uses WAL mode, so use one of these safe approaches:

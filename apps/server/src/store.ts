@@ -13,6 +13,9 @@ import {
   type GameState,
   type GeometryEffect,
   type MapFeatureCollection,
+  type OsmLayer,
+  type OsmLayerStatus,
+  type OsmLoadState,
   type Player,
   type PlayerRole,
   type QuestionConfig,
@@ -65,6 +68,14 @@ export class GameStore {
     this.db = bundle.db;
     this.db.update(players).set({ connectionCount: 0 }).run();
     this.adoptExistingDatasets();
+    for (const game of this.db.select().from(games).all()) {
+      const statuses = this.osmLoadState(game);
+      for (const layer of ["subdivisions", "transit"] as const) {
+        if (statuses[layer].status === "LOADING") {
+          this.setOsmLayerStatus(game.id, layer, "ERROR", "Loading was interrupted. Please retry.");
+        }
+      }
+    }
   }
 
   private currentRow(): GameRow | null {
@@ -318,6 +329,38 @@ export class GameStore {
     return player;
   }
 
+  private osmLoadState(row: GameRow): OsmLoadState {
+    const saved = decode<Partial<OsmLoadState>>(row.osmLoadStateJson) ?? {};
+    return {
+      subdivisions: saved.subdivisions ?? {
+        status: row.subdivisionsGeojson ? "LOADED" : "IDLE",
+        error: null,
+      },
+      transit: saved.transit ?? {
+        status: row.transitLinesGeojson ? "LOADED" : "IDLE",
+        error: null,
+      },
+    };
+  }
+
+  setOsmLayerStatus(
+    gameId: string,
+    layer: OsmLayer,
+    status: OsmLayerStatus["status"],
+    error: string | null = null,
+  ): boolean {
+    const game = this.currentRow();
+    if (!game || game.id !== gameId) return false;
+    const states = this.osmLoadState(game);
+    states[layer] = { status, error };
+    this.db
+      .update(games)
+      .set({ osmLoadStateJson: encode(states), revision: game.revision + 1, updatedAt: now() })
+      .where(eq(games.id, gameId))
+      .run();
+    return true;
+  }
+
   private mapGame(row: GameRow): GameConfig {
     return {
       id: row.id,
@@ -345,6 +388,7 @@ export class GameStore {
       ),
       transitStations: decode<FeatureCollection<Point>>(row.transitStationsGeojson),
       transitModes: decode<TransitMode[]>(row.transitModesJson)!,
+      osmLoadState: this.osmLoadState(row),
       revision: row.revision,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

@@ -41,6 +41,13 @@ export interface OSMSelection {
   boundingBox: [number, number, number, number];
 }
 
+export type OsmLayer = "subdivisions" | "transit";
+export interface OsmLayerStatus {
+  status: "IDLE" | "LOADING" | "LOADED" | "ERROR";
+  error: string | null;
+}
+export type OsmLoadState = Record<OsmLayer, OsmLayerStatus>;
+
 export interface GameConfig {
   id: string;
   name: string;
@@ -60,6 +67,7 @@ export interface GameConfig {
   transitLines: FeatureCollection<LineString | MultiLineString> | null;
   transitStations: FeatureCollection<Point> | null;
   transitModes: TransitMode[];
+  osmLoadState: OsmLoadState;
   revision: number;
   createdAt: string;
   updatedAt: string;

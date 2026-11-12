@@ -22,6 +22,7 @@ export const games = sqliteTable("games", {
   transitLinesGeojson: text("transit_lines_geojson"),
   transitStationsGeojson: text("transit_stations_geojson"),
   transitModesJson: text("transit_modes_json").notNull(),
+  osmLoadStateJson: text("osm_load_state_json").notNull().default("{}"),
   revision: integer("revision").notNull().default(1),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

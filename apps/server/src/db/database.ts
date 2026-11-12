@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS games (
   possible_area_geojson TEXT, first_division_admin_level INTEGER, subdivisions_geojson TEXT,
   transit_lines_geojson TEXT, transit_stations_geojson TEXT,
   transit_modes_json TEXT NOT NULL DEFAULT '["train","light_rail","subway","tram"]',
+  osm_load_state_json TEXT NOT NULL DEFAULT '{}',
   revision INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -75,6 +76,9 @@ export function openDatabase(path: string) {
   }
   if (!gameColumns.some((column) => column.name === "seeker_only")) {
     sqlite.exec(`ALTER TABLE games ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!gameColumns.some((column) => column.name === "osm_load_state_json")) {
+    sqlite.exec(`ALTER TABLE games ADD COLUMN osm_load_state_json TEXT NOT NULL DEFAULT '{}'`);
   }
   const datasetColumns = sqlite.pragma("table_info(datasets)") as Array<{ name: string }>;
   if (!datasetColumns.some((column) => column.name === "source_library_id")) {

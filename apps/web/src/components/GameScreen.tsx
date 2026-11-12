@@ -326,6 +326,14 @@ export function GameScreen({
           No Possible Area remains. Review, correct, disable, or delete an applied answer.
         </div>
       )}
+      {Object.values(state.game.osmLoadState).some((layer) => layer.status === "ERROR") && (
+        <div className="connection-banner" role="status">
+          <AlertTriangle size={16} /> Some map data could not load. Existing data is kept.
+          <button className="text-button" onClick={() => setPanel("data")}>
+            View & retry
+          </button>
+        </div>
+      )}
       <section className="map-stage">
         <GameMap
           state={state}
@@ -698,6 +706,7 @@ function DataPanel({
       await refresh();
     } catch (cause) {
       onError((cause as Error).message);
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -782,18 +791,46 @@ function DataPanel({
         <div className="data-section">
           <h3>OpenStreetMap layers</h3>
           <p>Already cached data stays usable if Overpass is unavailable.</p>
+          <div className="osm-layer-status" aria-live="polite">
+            {(["subdivisions", "transit"] as const).map((layer) => {
+              const loading = state.game.osmLoadState[layer];
+              const title = layer === "subdivisions" ? "First Division" : "Transit";
+              return (
+                <p key={layer}>
+                  <strong>{title}: </strong>
+                  {loading.status === "LOADING"
+                    ? "Loading…"
+                    : loading.status === "LOADED"
+                      ? "Loaded"
+                      : loading.status === "ERROR"
+                        ? "Could not load"
+                        : "Not loaded"}
+                  {loading.error && (
+                    <span className="muted">
+                      {" "}
+                      — {loading.error}. Retry below; existing data is kept.
+                    </span>
+                  )}
+                </p>
+              );
+            })}
+          </div>
           {state.me.role === "SEEKER" && (
             <div className="button-row">
               <button
                 className="button secondary"
-                disabled={busy}
+                disabled={
+                  busy ||
+                  state.game.osmLoadState.subdivisions.status === "LOADING" ||
+                  state.game.firstDivisionAdminLevel === null
+                }
                 onClick={() => void load("/api/game/subdivisions")}
               >
                 {state.game.subdivisions ? "Reload First Division" : "Load First Division"}
               </button>
               <button
                 className="button secondary"
-                disabled={busy}
+                disabled={busy || state.game.osmLoadState.transit.status === "LOADING"}
                 onClick={() => void load("/api/game/transit")}
               >
                 {state.game.transitLines ? "Reload transit" : "Load transit"}

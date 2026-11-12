@@ -7,7 +7,7 @@ import { combineBoundaries, type AreaFeature, type GameState } from "@hideseek/s
 import { buildApp, type BuiltApp } from "./app";
 import { loadConfig } from "./config";
 import { openDatabase, type DatabaseBundle } from "./db/database";
-import { OsmService } from "./services/osm";
+import { OsmService, OsmRequestError } from "./services/osm";
 import { GameStore } from "./store";
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -32,7 +32,12 @@ async function fixture(
     ...services,
     osm:
       services?.osm ??
-      new OsmService(database.db, config, { retryDelayMs: () => 0, maxAttempts: 3 }),
+      new OsmService(database.db, config, {
+        attempts: 3,
+        attemptTimeoutMs: 100,
+        totalTimeoutMs: 1_000,
+        retryDelayMs: 0,
+      }),
   });
   cleanups.push(async () => {
     built.stopTimer();
@@ -262,7 +267,7 @@ describe("server game integrity", () => {
       payload: { loadOsmPois: true },
     });
 
-    expect(started.statusCode).toBe(502);
+    expect(started.statusCode).toBe(503);
     expect(started.json<{ error: string }>().error).toContain("OpenStreetMap service returned 504");
     const state = (
       await app.inject({ method: "GET", url: "/api/game/current", headers: auth(seeker.token) })
@@ -1089,6 +1094,59 @@ describe("server game integrity", () => {
     expect(
       turf.booleanPointInPolygon(turf.point([16.5, 48.3]), finalState.game.possibleArea!),
     ).toBe(false);
+  });
+
+  it("projects layer failures to both roles, preserves loaded geometry and recovers interrupted loads", async () => {
+    const subdivisionData = turf.featureCollection([boundary]);
+    const mockOsm = {
+      subdivisions: vi.fn().mockRejectedValue(new OsmRequestError("Overpass unavailable")),
+      transit: vi
+        .fn()
+        .mockResolvedValue({
+          lines: turf.featureCollection([]),
+          stations: turf.featureCollection([]),
+        }),
+    } as unknown as OsmService;
+    const { app, store, database } = await fixture(undefined, {}, { osm: mockOsm });
+    const { seeker, hider } = await createAndJoin(app);
+    for (const identity of [seeker, hider]) {
+      expect(store.getState(identity.token).game.osmLoadState.subdivisions).toEqual({
+        status: "ERROR",
+        error: "Overpass unavailable",
+      });
+    }
+    const divisions = vi.mocked(mockOsm.subdivisions);
+    divisions.mockResolvedValueOnce(subdivisionData);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/game/subdivisions",
+          headers: auth(seeker.token),
+          payload: { adminLevel: 10 },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(store.getState(seeker.token).game.osmLoadState.subdivisions.status).toBe("LOADED");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/game/subdivisions",
+          headers: auth(seeker.token),
+          payload: { adminLevel: 10 },
+        })
+      ).statusCode,
+    ).toBe(503);
+    expect(store.getState(hider.token).game.subdivisions).toEqual(subdivisionData);
+    const gameId = store.getState(seeker.token).game.id;
+    store.setOsmLayerStatus(gameId, "transit", "LOADING");
+    const restarted = new GameStore(database);
+    expect(restarted.getState(hider.token).game.osmLoadState.transit).toEqual({
+      status: "ERROR",
+      error: "Loading was interrupted. Please retry.",
+    });
+    expect(restarted.getState(hider.token).game.subdivisions).toEqual(subdivisionData);
   });
 
   it("automatically loads administrative boundaries and transit lines on game creation", async () => {

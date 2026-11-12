@@ -15,12 +15,13 @@ import {
   markerInputSchema,
   startGameSchema,
   type TransitMode,
+  type OsmLayer,
   updateQuestionSchema,
 } from "@hideseek/shared";
 import type { AppConfig } from "./config.js";
 import type { DatabaseBundle } from "./db/database.js";
 import { parseKmlUpload } from "./services/kml.js";
-import { OsmService } from "./services/osm.js";
+import { OsmService, OsmRequestError } from "./services/osm.js";
 import { DomainError, GameStore } from "./store.js";
 
 function bearer(request: FastifyRequest): string | undefined {
@@ -79,6 +80,51 @@ export async function buildApp(
   });
   const broadcast = () => io.emit("state:changed", { at: new Date().toISOString() });
 
+  const layerRequests = new Map<string, Promise<unknown>>();
+  const loadLayer = <T>(
+    gameId: string,
+    layer: OsmLayer,
+    requestKey: string,
+    fetchData: () => Promise<T>,
+    save: (data: T) => boolean,
+  ): Promise<T> => {
+    const key = `${gameId}:${layer}:${requestKey}`;
+    const existing = layerRequests.get(key);
+    if (existing) return existing as Promise<T>;
+    // Serialize distinct requests for the same layer so an older request cannot overwrite a newer one.
+    const previous = [...layerRequests.entries()]
+      .reverse()
+      .find(([id]) => id.startsWith(`${gameId}:${layer}:`))?.[1];
+    const request = (async () => {
+      if (previous) await previous.catch(() => undefined);
+      if (!store.setOsmLayerStatus(gameId, layer, "LOADING"))
+        throw new DomainError("The game is no longer current", 409);
+      broadcast();
+      try {
+        const data = await fetchData();
+        if (!save(data)) throw new DomainError("The game is no longer current", 409);
+        store.setOsmLayerStatus(gameId, layer, "LOADED");
+        broadcast();
+        return data;
+      } catch (cause) {
+        store.setOsmLayerStatus(
+          gameId,
+          layer,
+          "ERROR",
+          cause instanceof Error ? cause.message : "Could not load map data",
+        );
+        broadcast();
+        throw cause;
+      }
+    })();
+    layerRequests.set(key, request);
+    void request.then(
+      () => layerRequests.delete(key),
+      () => layerRequests.delete(key),
+    );
+    return request;
+  };
+
   const autoLoadGameData = async (
     gameId: string,
     gameInput: {
@@ -92,55 +138,35 @@ export async function buildApp(
     },
   ) => {
     const tasks: Promise<unknown>[] = [];
-    if (
-      gameInput.firstDivisionAdminLevel !== null &&
-      gameInput.firstDivisionAdminLevel !== undefined &&
-      gameInput.osm.osmType === "relation"
-    ) {
+    if (gameInput.firstDivisionAdminLevel != null && gameInput.osm.osmType === "relation") {
+      const level = gameInput.firstDivisionAdminLevel;
       tasks.push(
-        osm
-          .subdivisions(
-            gameInput.osm.osmType,
-            gameInput.osm.osmId,
-            gameInput.firstDivisionAdminLevel,
-          )
-          .then((subdivisions) => {
-            if (
-              store.saveSubdivisionsForGame(
-                gameId,
-                gameInput.firstDivisionAdminLevel!,
-                subdivisions,
-              )
-            ) {
-              broadcast();
-            }
-          })
-          .catch((err) => {
-            app.log.warn(
-              { err, gameId },
-              "Failed to auto-load administrative boundaries on game creation",
-            );
-          }),
+        loadLayer(
+          gameId,
+          "subdivisions",
+          String(level),
+          () => osm.subdivisions(gameInput.osm.osmType, gameInput.osm.osmId, level),
+          (data) => store.saveSubdivisionsForGame(gameId, level, data),
+        ),
       );
     }
-    if (gameInput.transitModes && gameInput.transitModes.length > 0) {
+    if (gameInput.transitModes.length > 0) {
       tasks.push(
-        osm
-          .transit(gameInput.osm.boundingBox, gameInput.transitModes)
-          .then((transit) => {
-            if (store.saveTransitForGame(gameId, transit)) {
-              broadcast();
-            }
-          })
-          .catch((err) => {
-            app.log.warn({ err, gameId }, "Failed to auto-load transit lines on game creation");
-          }),
+        loadLayer(
+          gameId,
+          "transit",
+          gameInput.transitModes.join(","),
+          () => osm.transit(gameInput.osm.boundingBox, gameInput.transitModes),
+          (data) => store.saveTransitForGame(gameId, data),
+        ),
       );
     }
     await Promise.allSettled(tasks);
   };
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof OsmRequestError)
+      return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof DomainError)
       return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof ZodError)
@@ -275,22 +301,26 @@ export async function buildApp(
     const player = store.requireSeeker(token);
     const input = z.object({ adminLevel: z.number().int().min(2).max(12) }).parse(request.body);
     const state = store.getState(token);
-    const data = await osm.subdivisions(
-      state.game.osm.osmType,
-      state.game.osm.osmId,
-      input.adminLevel,
+    const data = await loadLayer(
+      state.game.id,
+      "subdivisions",
+      String(input.adminLevel),
+      () => osm.subdivisions(state.game.osm.osmType, state.game.osm.osmId, input.adminLevel),
+      (value) => store.saveSubdivisionsForGame(state.game.id, input.adminLevel, value),
     );
-    store.saveSubdivisions(token, input.adminLevel, data);
-    broadcast();
     return { count: data.features.length, requestedBy: player.id };
   });
   app.post("/api/game/transit", async (request) => {
     const token = bearer(request);
     store.requireSeeker(token);
     const state = store.getState(token);
-    const data = await osm.transit(state.game.osm.boundingBox, state.game.transitModes);
-    store.saveTransit(token, data);
-    broadcast();
+    const data = await loadLayer(
+      state.game.id,
+      "transit",
+      state.game.transitModes.join(","),
+      () => osm.transit(state.game.osm.boundingBox, state.game.transitModes),
+      (value) => store.saveTransitForGame(state.game.id, value),
+    );
     return { lines: data.lines.features.length, stations: data.stations.features.length };
   });
 
