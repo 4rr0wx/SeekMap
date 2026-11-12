@@ -643,6 +643,11 @@ textarea:focus {
 .map.interaction-active {
   cursor: crosshair;
 }
+.map-chrome,
+.map-chrome-top,
+.map-status-stack {
+  display: contents;
+}
 .map-tools {
   position: absolute;
   top: 12px;
@@ -680,6 +685,10 @@ textarea:focus {
 .map-tool {
   background: #12201df2;
   box-shadow: 4px 4px 0 #07100fb3;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 .map-tool.active {
   background: var(--gold);
@@ -712,25 +721,45 @@ textarea:focus {
   color: var(--gold);
   background: transparent;
   font-weight: 800;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .measurement-result {
   top: auto;
   bottom: 14px;
 }
-.connection-banner {
+.banner-stack {
   position: absolute;
   z-index: 8;
-  top: 76px;
+  top: 72px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(480px, calc(100% - 160px));
+  pointer-events: none;
+}
+.connection-banner {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  pointer-events: auto;
   background: #572d25;
   color: #ffe2dc;
   border: 1px solid #88483c;
   border-radius: var(--radius-small);
   padding: 8px 13px;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 0.8rem;
+  line-height: 1.35;
 }
 .geometry-warning {
   background: #5a2824;
@@ -931,8 +960,8 @@ textarea:focus {
   flex: 0 0 auto;
 }
 .icon-button.small {
-  min-width: 34px;
-  min-height: 34px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: var(--radius-small);
 }
 .icon-button.small svg {
@@ -975,7 +1004,7 @@ textarea:focus {
   flex-wrap: wrap;
 }
 .point-picker-actions .button {
-  min-height: 40px;
+  min-height: 44px;
 }
 .coordinate-title,
 .section-inline {
@@ -1082,7 +1111,7 @@ textarea:focus {
 }
 .small-button,
 .answer-button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 7px 12px;
   font-size: 0.8rem;
 }
@@ -1291,7 +1320,7 @@ textarea:focus {
     min-height: 90px;
   }
   .game-header {
-    grid-template-columns: minmax(0, 1fr) auto repeat(3, 40px);
+    grid-template-columns: minmax(0, 1fr) auto auto repeat(2, 44px);
     gap: 6px;
     padding-left: 11px;
     padding-right: 9px;
@@ -1303,8 +1332,8 @@ textarea:focus {
     font-size: 1.15rem;
   }
   .game-header .header-action {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    min-height: 44px;
   }
   .bottom-bar {
     gap: 7px;
@@ -1318,15 +1347,6 @@ textarea:focus {
     min-width: 112px;
     padding: 0 9px;
   }
-  .align-end .sheet {
-    margin-top: 7dvh;
-    max-height: 93dvh;
-    width: 100%;
-    border-radius: var(--radius) var(--radius) 0 0;
-  }
-  .modal-backdrop.align-end {
-    align-items: flex-end;
-  }
   .sheet {
     padding: 19px;
     border-radius: var(--radius);
@@ -1334,14 +1354,6 @@ textarea:focus {
   .sheet-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
-  }
-  .interaction-hint {
-    top: auto;
-    bottom: 12px;
-    max-width: calc(100% - 28px);
-  }
-  .measurement-result {
-    bottom: 12px;
   }
   .pending-answer {
     bottom: 85px;
@@ -1351,12 +1363,6 @@ textarea:focus {
     width: auto;
     max-height: 62dvh;
     padding: 17px;
-  }
-  .location-card {
-    top: 68px;
-    left: 12px;
-    width: auto;
-    max-width: calc(100% - 24px);
   }
   .area-preview-map {
     height: 210px;
@@ -1374,6 +1380,111 @@ textarea:focus {
 }
 
 @media (max-width: 1099px) {
+  .map-chrome {
+    position: absolute;
+    z-index: 4;
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .map-stage.has-activity-bar .map-chrome {
+    bottom: 88px;
+  }
+  .map-chrome-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .map-chrome .map-tools {
+    position: static;
+    pointer-events: auto;
+  }
+  .map-tool.legend-tool {
+    display: none;
+  }
+  .map-chrome .banner-stack {
+    position: static;
+    top: auto;
+    left: auto;
+    transform: none;
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: stretch;
+  }
+  .map-chrome .connection-banner {
+    width: 100%;
+  }
+  .map-chrome .location-card {
+    position: static;
+    top: auto;
+    left: auto;
+    width: fit-content;
+    max-width: 100%;
+    pointer-events: auto;
+  }
+  .map-status-stack {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: auto;
+  }
+  .map-status-stack .interaction-hint,
+  .map-status-stack .measurement-result {
+    position: static;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    transform: none;
+    max-width: 100%;
+    pointer-events: auto;
+  }
+  .modal-backdrop.align-end {
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .align-end .sheet {
+    width: min(680px, 100%);
+    max-height: min(88dvh, 820px);
+    margin-top: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .question-sidebar.composer {
+    top: auto;
+    right: 0;
+    bottom: max(84px, calc(env(safe-area-inset-bottom) + 76px));
+    left: 0;
+    width: min(640px, calc(100% - 16px));
+    margin-inline: auto;
+    max-height: min(
+      68dvh,
+      calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 168px)
+    );
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 16px 16px 12px;
+  }
+  .question-sidebar.composer .sheet-header {
+    flex: 0 0 auto;
+    margin-bottom: 12px;
+  }
+  .question-sidebar.composer .form-stack {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 4px;
+  }
   .activity-sidebar {
     top: auto;
     bottom: max(84px, calc(env(safe-area-inset-bottom) + 76px));
@@ -1381,8 +1492,8 @@ textarea:focus {
     padding: 0;
     overflow: hidden;
     transition:
-      max-height 180ms ease,
-      box-shadow 180ms ease;
+      max-height 240ms ease,
+      box-shadow 240ms ease;
   }
   .activity-sidebar.is-collapsed {
     max-height: 76px;
@@ -1437,8 +1548,8 @@ textarea:focus {
     white-space: nowrap;
   }
   .activity-mobile-chevron {
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
     flex: 0 0 auto;
     display: grid;
     place-items: center;
@@ -1457,7 +1568,26 @@ textarea:focus {
     padding: 0 14px 14px;
   }
   .activity-sidebar.is-collapsed .activity-list {
-    display: none;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 160ms ease,
+      visibility 0s linear 160ms;
+  }
+  .activity-sidebar.is-expanded .activity-list {
+    opacity: 1;
+    visibility: visible;
+    transition:
+      opacity 180ms ease,
+      visibility 0s linear;
+  }
+}
+
+@media (max-width: 760px) {
+  .align-end .sheet {
+    width: 100%;
+    max-height: 93dvh;
   }
 }
 
@@ -1678,4 +1808,55 @@ textarea:focus {
   background: #1743a5;
   font: 600 12px/1.2 sans-serif;
   box-shadow: 0 1px 6px #0004;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal-backdrop {
+    animation: fade-in 180ms ease-out;
+  }
+  .connection-banner {
+    animation: banner-in 200ms ease-out;
+  }
+}
+@media (prefers-reduced-motion: no-preference) and (max-width: 1099px) {
+  .modal-backdrop .sheet,
+  .question-sidebar.composer {
+    animation: sheet-up 220ms ease-out;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-tool,
+  .activity-sidebar,
+  .activity-sidebar .activity-list {
+    transition: none;
+  }
 }

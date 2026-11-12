@@ -320,6 +320,12 @@ export function GameScreen({
     });
   }
 
+  const hasActivityBar = panel === null && !composer.open && activeQuestions.length > 0;
+  const osmDegraded = Object.values(state.game.osmLoadState).some(
+    (layer) => layer.status === "ERROR",
+  );
+  const showBanners = !connected || !state.game.possibleArea || osmDegraded;
+
   return (
     <main className="game-shell">
       <header className="game-header">
@@ -360,32 +366,7 @@ export function GameScreen({
           <Layers3 size={20} />
         </button>
       </header>
-      {!connected && (
-        <div className="connection-banner">
-          <WifiOff size={16} />
-          Reconnecting — displayed shared state may be out of date.
-        </div>
-      )}
-      {!state.game.possibleArea && (
-        <div className="connection-banner geometry-warning" role="alert">
-          <AlertTriangle size={16} />
-          No Possible Area remains. Review, correct, disable, or delete an applied answer.
-        </div>
-      )}
-      {Object.values(state.game.osmLoadState).some((layer) => layer.status === "ERROR") && (
-        <div className="connection-banner" role="status">
-          <AlertTriangle size={16} /> Some map data could not load. Existing data is kept.
-          <button
-            className="text-button"
-            onClick={() =>
-              setPanel(state.game.osmLoadState.pois.status === "ERROR" ? "game" : "data")
-            }
-          >
-            View & retry
-          </button>
-        </div>
-      )}
-      <section className="map-stage">
+      <section className={`map-stage${hasActivityBar ? " has-activity-bar" : ""}`}>
         <GameMap
           state={state}
           config={config}
@@ -400,82 +381,121 @@ export function GameScreen({
           interactionActive={interaction !== null}
           onMapClick={mapClick}
         />
-        <div className="map-tools">
-          <button
-            className={interaction === "measure" ? "map-tool active" : "map-tool"}
-            onClick={() => {
-              setInteraction(interaction === "measure" ? null : "measure");
-              setMeasurement([]);
-            }}
-            aria-label="Measure distance"
-            title="Measure distance"
-          >
-            <Ruler />
-          </button>
-          {state.me.role === "SEEKER" && (
-            <button
-              className={interaction === "marker" ? "map-tool active" : "map-tool"}
-              onClick={() => setInteraction(interaction === "marker" ? null : "marker")}
-              aria-label="Place Seeker marker"
-              title="Place Seeker marker"
+        <div className="map-chrome">
+          <div className="map-chrome-top">
+            <div className="map-tools">
+              <button
+                className={interaction === "measure" ? "map-tool active" : "map-tool"}
+                onClick={() => {
+                  setInteraction(interaction === "measure" ? null : "measure");
+                  setMeasurement([]);
+                }}
+                aria-label="Measure distance"
+                title="Measure distance"
+              >
+                <Ruler />
+              </button>
+              {state.me.role === "SEEKER" && (
+                <button
+                  className={interaction === "marker" ? "map-tool active" : "map-tool"}
+                  onClick={() => setInteraction(interaction === "marker" ? null : "marker")}
+                  aria-label="Place Seeker marker"
+                  title="Place Seeker marker"
+                >
+                  <MapPinPlus />
+                </button>
+              )}
+              <button
+                className="map-tool"
+                onClick={() => requestGps()}
+                aria-label="Show my location locally"
+                title="Show my location locally"
+              >
+                <Crosshair />
+              </button>
+              <button
+                className="map-tool legend-tool"
+                onClick={() => setPanel("legend")}
+                aria-label="Map guide and legend"
+                title="Map guide and legend"
+              >
+                <CircleHelp />
+              </button>
+            </div>
+            {showBanners && (
+              <div className="banner-stack">
+                {!connected && (
+                  <div className="connection-banner">
+                    <WifiOff size={16} />
+                    Reconnecting — displayed shared state may be out of date.
+                  </div>
+                )}
+                {!state.game.possibleArea && (
+                  <div className="connection-banner geometry-warning" role="alert">
+                    <AlertTriangle size={16} />
+                    No Possible Area remains. Review, correct, disable, or delete an applied answer.
+                  </div>
+                )}
+                {osmDegraded && (
+                  <div className="connection-banner" role="status">
+                    <AlertTriangle size={16} /> Some map data could not load. Existing data is kept.
+                    <button
+                      className="text-button"
+                      onClick={() =>
+                        setPanel(state.game.osmLoadState.pois.status === "ERROR" ? "game" : "data")
+                      }
+                    >
+                      View & retry
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {!localPosition && (
+            <div
+              className={`location-card ${locationStatus === "blocked" ? "blocked" : ""}`}
+              aria-live="polite"
             >
-              <MapPinPlus />
-            </button>
+              {locationMessage && <span>{locationMessage}</span>}
+              <button
+                className="button secondary small-button"
+                disabled={locationStatus === "requesting"}
+                onClick={() => requestGps()}
+              >
+                <Crosshair size={16} />{" "}
+                {locationStatus === "requesting" ? "Requesting…" : "Enable location"}
+              </button>
+            </div>
           )}
-          <button
-            className="map-tool"
-            onClick={() => requestGps()}
-            aria-label="Show my location locally"
-            title="Show my location locally"
-          >
-            <Crosshair />
-          </button>
-          <button
-            className="map-tool"
-            onClick={() => setPanel("legend")}
-            aria-label="Map guide and legend"
-            title="Map guide and legend"
-          >
-            <CircleHelp />
-          </button>
+          {(interaction || distance !== null) && (
+            <div className="map-status-stack">
+              {interaction && (
+                <div className="interaction-hint">
+                  {interaction === "measure"
+                    ? `Tap ${measurement.length === 0 ? "point A" : measurement.length === 1 ? "point B" : "to start again"}`
+                    : interaction === "marker"
+                      ? "Tap the map to place a Seeker marker"
+                      : `Tap the map to choose ${interaction === "question-a" ? "the reference point" : "the end point"}`}
+                  <button onClick={() => setInteraction(null)} aria-label="Cancel">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+              {distance !== null && (
+                <div className="measurement-result">
+                  <Ruler size={17} />
+                  <strong>
+                    {distance < 1
+                      ? `${Math.round(distance * 1000)} m`
+                      : `${distance.toFixed(2)} km`}
+                  </strong>
+                  <button onClick={() => setMeasurement([])}>Reset</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {!localPosition && (
-          <div
-            className={`location-card ${locationStatus === "blocked" ? "blocked" : ""}`}
-            aria-live="polite"
-          >
-            {locationMessage && <span>{locationMessage}</span>}
-            <button
-              className="button secondary small-button"
-              disabled={locationStatus === "requesting"}
-              onClick={() => requestGps()}
-            >
-              <Crosshair size={16} />{" "}
-              {locationStatus === "requesting" ? "Requesting…" : "Enable location"}
-            </button>
-          </div>
-        )}
-        {interaction && (
-          <div className="interaction-hint">
-            {interaction === "measure"
-              ? `Tap ${measurement.length === 0 ? "point A" : measurement.length === 1 ? "point B" : "to start again"}`
-              : interaction === "marker"
-                ? "Tap the map to place a Seeker marker"
-                : `Tap the map to choose ${interaction === "question-a" ? "the reference point" : "the end point"}`}
-            <button onClick={() => setInteraction(null)} aria-label="Cancel">
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {distance !== null && (
-          <div className="measurement-result">
-            <Ruler size={17} />
-            <strong>
-              {distance < 1 ? `${Math.round(distance * 1000)} m` : `${distance.toFixed(2)} km`}
-            </strong>
-            <button onClick={() => setMeasurement([])}>Reset</button>
-          </div>
-        )}
       </section>
 
       <div className="action-rail">
