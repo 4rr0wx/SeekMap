@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import * as turf from "@turf/turf";
 import {
   AlertTriangle,
@@ -126,10 +126,27 @@ export function GameScreen({
     id?: string;
   } | null>(null);
 
+  const autoEnabledTemporaryDatasetIds = useRef<string | null>(null);
+
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const temporaryIds = state.datasets
+      .filter((dataset) => dataset.temporary)
+      .map((dataset) => dataset.id)
+      .sort()
+      .join(",");
+    if (!temporaryIds) {
+      autoEnabledTemporaryDatasetIds.current = null;
+      return;
+    }
+    if (autoEnabledTemporaryDatasetIds.current === temporaryIds) return;
+    autoEnabledTemporaryDatasetIds.current = temporaryIds;
+    setLayers((current) => (current.datasets ? current : { ...current, datasets: true }));
+  }, [state.datasets]);
 
   useEffect(() => {
     if (!("permissions" in navigator)) return;
@@ -329,7 +346,12 @@ export function GameScreen({
       {Object.values(state.game.osmLoadState).some((layer) => layer.status === "ERROR") && (
         <div className="connection-banner" role="status">
           <AlertTriangle size={16} /> Some map data could not load. Existing data is kept.
-          <button className="text-button" onClick={() => setPanel("data")}>
+          <button
+            className="text-button"
+            onClick={() =>
+              setPanel(state.game.osmLoadState.pois.status === "ERROR" ? "game" : "data")
+            }
+          >
             View & retry
           </button>
         </div>
@@ -553,7 +575,11 @@ export function GameScreen({
           state={state}
           busy={gameActionBusy}
           onClose={() => setPanel(null)}
-          onStart={(loadOsmPois) => gameAction("/api/game/start", "POST", { loadOsmPois })}
+          onStart={(loadOsmPois) =>
+            gameAction(loadOsmPois ? "/api/game/start?async=true" : "/api/game/start", "POST", {
+              loadOsmPois,
+            })
+          }
           onEnd={() => {
             if (
               window.confirm(
@@ -986,6 +1012,8 @@ function GamePanel({
   onLeaveDevice: () => void;
 }) {
   const [showOsmPrompt, setShowOsmPrompt] = useState(false);
+  const poiStatus = state.game.osmLoadState.pois;
+  const starting = busy || poiStatus.status === "LOADING";
 
   return (
     <div className="modal-backdrop align-end">
@@ -1017,68 +1045,86 @@ function GamePanel({
           <>
             <button
               className="button primary wide"
-              disabled={busy}
+              disabled={starting}
               onClick={() =>
                 state.datasets.length === 0 ? setShowOsmPrompt(true) : void onStart(false)
               }
             >
               <Play size={18} />
-              {busy ? "Starting…" : "Start game"}
+              {starting ? "Starting…" : "Start game"}
             </button>
-            {showOsmPrompt && state.datasets.length === 0 && (
-              <div className="osm-poi-prompt" role="group" aria-label="OpenStreetMap POI fallback">
-                <div className="osm-poi-prompt-copy">
-                  <Database size={20} />
-                  <div>
-                    <strong>No map datasets selected</strong>
-                    <p>
-                      Load named points of interest from OpenStreetMap for this game? They are
-                      removed automatically when the game ends.
-                    </p>
+            {(showOsmPrompt || poiStatus.status === "ERROR" || poiStatus.status === "LOADING") &&
+              state.datasets.length === 0 && (
+                <div
+                  className="osm-poi-prompt"
+                  role="group"
+                  aria-label="OpenStreetMap POI fallback"
+                >
+                  <div className="osm-poi-prompt-copy">
+                    <Database size={20} />
+                    <div>
+                      <strong>No map datasets selected</strong>
+                      <p>
+                        Load named points of interest from OpenStreetMap for this game? They are
+                        removed automatically when the game ends.
+                      </p>
+                    </div>
                   </div>
+                  {poiStatus.status === "ERROR" && (
+                    <p role="alert">{poiStatus.error}. Retry or start without POIs.</p>
+                  )}
+                  {poiStatus.status === "LOADING" && (
+                    <p role="status">
+                      Loading map places… You can close this panel; the game starts when loading
+                      finishes.
+                    </p>
+                  )}
+                  <button
+                    className="button primary wide"
+                    disabled={starting}
+                    onClick={() => void onStart(true)}
+                  >
+                    {starting
+                      ? "Loading OSM POIs…"
+                      : poiStatus.status === "ERROR"
+                        ? "Retry OSM POIs & start"
+                        : "Load OSM POIs & start"}
+                  </button>
+                  <button
+                    className="button secondary wide"
+                    disabled={starting}
+                    onClick={() => void onStart(false)}
+                  >
+                    Start without POIs
+                  </button>
+                  <button
+                    className="button subtle wide"
+                    disabled={starting}
+                    onClick={() => setShowOsmPrompt(false)}
+                  >
+                    Cancel
+                  </button>
                 </div>
-                <button
-                  className="button primary wide"
-                  disabled={busy}
-                  onClick={() => void onStart(true)}
-                >
-                  {busy ? "Loading OSM POIs…" : "Load OSM POIs & start"}
-                </button>
-                <button
-                  className="button secondary wide"
-                  disabled={busy}
-                  onClick={() => void onStart(false)}
-                >
-                  Start without POIs
-                </button>
-                <button
-                  className="button subtle wide"
-                  disabled={busy}
-                  onClick={() => setShowOsmPrompt(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-            <button className="button danger-button wide" disabled={busy} onClick={onReset}>
+              )}
+            <button className="button danger-button wide" disabled={starting} onClick={onReset}>
               <Trash2 size={17} />
               Discard setup
             </button>
           </>
         )}
         {state.me.role === "SEEKER" && !["LOBBY", "ENDED"].includes(state.game.phase) && (
-          <button className="button danger-button wide" disabled={busy} onClick={onEnd}>
+          <button className="button danger-button wide" disabled={starting} onClick={onEnd}>
             <Square size={17} />
             End game
           </button>
         )}
         {state.me.role === "SEEKER" && state.game.phase === "ENDED" && (
-          <button className="button danger-button wide" disabled={busy} onClick={onReset}>
+          <button className="button danger-button wide" disabled={starting} onClick={onReset}>
             <Trash2 size={17} />
             Clear current game
           </button>
         )}
-        <button className="button subtle wide" disabled={busy} onClick={onLeaveDevice}>
+        <button className="button subtle wide" disabled={starting} onClick={onLeaveDevice}>
           <Settings2 size={17} />
           Forget identity on this device
         </button>

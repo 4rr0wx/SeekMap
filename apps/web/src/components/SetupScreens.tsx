@@ -98,7 +98,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     void loadDatasetLibrary()
       .then(({ datasets }) => {
         setDatasetLibrary(datasets);
-        setSelectedDatasetIds(datasets.map((item) => item.id));
+        // Leave previous library entries unchecked so "no files" still offers the OSM POI prompt.
       })
       .catch((cause: Error) => onError(cause.message));
   }, [onError]);

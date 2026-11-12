@@ -496,3 +496,131 @@ describe("OSM request resilience", () => {
     }
   });
 });
+
+describe("bounded POI import", () => {
+  it("splits large bounds, deduplicates OSM IDs and respects polygon holes", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            elements: [
+              {
+                type: "node",
+                id: 1,
+                lat: 48.2,
+                lon: 16.3,
+                tags: { name: "Museum", tourism: "museum" },
+              },
+              {
+                type: "node",
+                id: 2,
+                lat: 48.1,
+                lon: 16.15,
+                tags: { name: "Excluded", amenity: "cafe" },
+              },
+              { type: "node", id: 3, lat: 49, lon: 17, tags: { name: "Outside", amenity: "cafe" } },
+            ],
+          }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      const boundary = {
+        type: "Feature" as const,
+        properties: {},
+        geometry: {
+          type: "Polygon" as const,
+          coordinates: [
+            [
+              [16, 48],
+              [16.5, 48],
+              [16.5, 48.25],
+              [16, 48.25],
+              [16, 48],
+            ],
+            [
+              [16.1, 48.05],
+              [16.1, 48.15],
+              [16.2, 48.15],
+              [16.2, 48.05],
+              [16.1, 48.05],
+            ],
+          ],
+        },
+      };
+      const result = await service.pointsOfInterest([16, 48, 16.5, 48.25], boundary);
+      expect(result.features.map((item) => item.properties?.name)).toEqual(["Museum"]);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(
+        new Set(
+          fetchMock.mock.calls.map((call) =>
+            String((call as unknown as [string, RequestInit])[1].body),
+          ),
+        ).size,
+      ).toBe(4);
+      expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("rejects unbounded areas before making requests", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig(), quickPolicy);
+      await expect(
+        service.pointsOfInterest([10, 40, 30, 60], {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [10, 40],
+                [30, 40],
+                [30, 60],
+                [10, 60],
+                [10, 40],
+              ],
+            ],
+          },
+        }),
+      ).rejects.toThrow("too large");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      database.sqlite.close();
+    }
+  });
+});
+
+it("uses explicitly configured Overpass URL mirrors within the retry budget", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response("Busy", { status: 504 }))
+    .mockImplementation(validOverpass);
+  vi.stubGlobal("fetch", fetchMock);
+  const database = openDatabase(":memory:");
+  try {
+    const service = new OsmService(
+      database.db,
+      loadConfig({
+        OVERPASS_URLS:
+          "https://primary.example/api/interpreter,https://fallback.example/api/interpreter",
+      }),
+      quickPolicy,
+    );
+    await service.transit([16, 48, 17, 49], ["train"]);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://primary.example/api/interpreter",
+      "https://fallback.example/api/interpreter",
+    ]);
+  } finally {
+    database.sqlite.close();
+  }
+});
