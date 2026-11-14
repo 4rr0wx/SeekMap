@@ -34,10 +34,13 @@ export interface AppConfig {
   webRoot: string;
 }
 
+const DEFAULT_OVERPASS_URLS =
+  "https://overpass-api.de/api/interpreter,https://lz4.overpass-api.de/api/interpreter";
+
 export function loadConfig(environment = process.env): AppConfig {
   const dataDirectory = resolve(environment.DATA_DIR ?? "./data");
   const overpassSource = environment.OVERPASS_URLS?.trim() || environment.OVERPASS_URL || undefined;
-  const overpassUrls = parseUrlList(overpassSource, "https://overpass-api.de/api/interpreter");
+  const overpassUrls = parseUrlList(overpassSource, DEFAULT_OVERPASS_URLS);
   return {
     port: positiveInt(environment.PORT, 3030),
     host: environment.HOST ?? "0.0.0.0",

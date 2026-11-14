@@ -1980,3 +1980,33 @@ describe("Seeker location sharing", () => {
     }
   });
 });
+
+describe("OSM subdivision discovery API", () => {
+  it("accepts out-of-range parentAdminLevel values for subdivision discovery", async () => {
+    const mockOsm = {
+      searchAreas: vi.fn(),
+      subdivisionLevels: vi
+        .fn()
+        .mockResolvedValue([{ adminLevel: 8, count: 3, examples: ["A", "B", "C"] }]),
+      subdivisions: vi.fn(),
+      transit: vi.fn(),
+    } as unknown as OsmService;
+    const { app } = await fixture(undefined, {}, { osm: mockOsm });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/osm/subdivision-levels",
+      payload: {
+        osmType: "relation",
+        osmId: "109166",
+        parentAdminLevel: 15,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      levels: [{ adminLevel: 8, count: 3, examples: ["A", "B", "C"] }],
+    });
+    expect(mockOsm.subdivisionLevels).toHaveBeenCalledWith("relation", "109166", null);
+  });
+});

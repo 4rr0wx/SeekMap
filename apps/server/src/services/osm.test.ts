@@ -380,7 +380,45 @@ describe("OSM transit normalization", () => {
         statusCode: 503,
         retryable: true,
       });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("retries capacity 406 responses across configured Overpass mirrors", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Not Acceptable", { status: 406 }))
+      .mockImplementation(async () =>
+        Response.json({
+          elements: [
+            {
+              type: "way",
+              id: 2,
+              nodes: [10, 11],
+              geometry: [
+                { lat: 48.2, lon: 16.3 },
+                { lat: 48.21, lon: 16.31 },
+              ],
+              tags: { name: "Main line", railway: "rail" },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const database = openDatabase(":memory:");
+    try {
+      const service = serviceWithFastRetries(database.db, {
+        OVERPASS_URLS:
+          "https://primary.example/api/interpreter,https://secondary.example/api/interpreter",
+      });
+      const result = await service.transit([16.2, 48.1, 16.4, 48.3], ["train"]);
+      expect(result.lines.features).toHaveLength(1);
+      expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+        "https://primary.example/api/interpreter",
+        "https://secondary.example/api/interpreter",
+      ]);
     } finally {
       database.sqlite.close();
     }
@@ -441,7 +479,8 @@ describe("OSM request resilience", () => {
       await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow(
         "could not complete",
       );
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Default config has two Overpass mirrors × three attempts.
+      expect(fetchMock).toHaveBeenCalledTimes(6);
       expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM osm_cache").get()).toEqual({
         count: 0,
       });
@@ -524,7 +563,8 @@ describe("OSM request resilience", () => {
     try {
       const service = new OsmService(database.db, loadConfig(), quickPolicy);
       await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow("429");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Both default mirrors are tried once; Retry-After then exceeds the budget.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       database.sqlite.close();
     }
@@ -549,7 +589,7 @@ describe("OSM request resilience", () => {
         attemptTimeoutMs: 5,
       });
       await expect(service.transit([16, 48, 17, 49], ["train"])).rejects.toThrow("timed out");
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
     } finally {
       database.sqlite.close();
     }
