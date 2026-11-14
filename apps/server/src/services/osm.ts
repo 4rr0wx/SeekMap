@@ -106,7 +106,8 @@ export class OsmService {
             throw new OsmRequestError(
               `OpenStreetMap service returned ${response.status}`,
               503,
-              [429, 500, 502, 503, 504].includes(response.status),
+              // Retry across mirrors for capacity/queue rejections (including 406) and gateway errors.
+              [406, 408, 425, 429, 500, 502, 503, 504].includes(response.status),
             );
           }
           const reader = response.body?.getReader();

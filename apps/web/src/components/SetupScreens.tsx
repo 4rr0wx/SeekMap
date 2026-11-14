@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AlertTriangle,
   Compass,
@@ -32,20 +32,17 @@ import {
 } from "../api";
 import type { GameSummary } from "../useGameSession";
 import { MAP_COLORS } from "../mapTheme";
+import {
+  describeSubdivisionLevel,
+  subdivisionDiscoveryView,
+  type SubdivisionDiscoveryView,
+} from "../subdivisionSetup";
 import { AreaPreview } from "./AreaPreview";
 
 export interface SelectedBoundary {
   id: string;
   result: SearchAreaResult;
   mode: "ADD" | "SUBTRACT";
-}
-
-function describeSubdivision(level: SubdivisionLevel): string {
-  if (level.examples.length === 0) {
-    return `${level.count} areas (OSM level ${level.adminLevel})`;
-  }
-  const suffix = level.count > level.examples.length ? ", …" : "";
-  return `${level.count} areas: ${level.examples.join(", ")}${suffix}`;
 }
 
 function divisionOption(level: SubdivisionLevel): string {
@@ -71,8 +68,12 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
   const [boundaries, setBoundaries] = useState<SelectedBoundary[]>([]);
   const [divisionLevel, setDivisionLevel] = useState<number | "">("");
   const [divisionCandidates, setDivisionCandidates] = useState<SubdivisionLevel[]>([]);
+  const [divisionSummary, setDivisionSummary] = useState(
+    "Choose an area to load its subdivisions.",
+  );
   const [divisionStatus, setDivisionStatus] = useState("Choose an area to load its subdivisions.");
   const [divisionFailed, setDivisionFailed] = useState(false);
+  const firstDivisionAutoDisabled = useRef(false);
   const [transitModes, setTransitModes] = useState<TransitMode[]>([
     "train",
     "light_rail",
@@ -93,6 +94,31 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
   const firstDivisionEnabled = questionConfigs.some(
     (item) => item.definitionId === "matching.first-division" && item.enabled,
   );
+
+  function applySubdivisionView(view: SubdivisionDiscoveryView) {
+    setDivisionLevel(view.divisionLevel);
+    setDivisionCandidates(view.candidates);
+    setDivisionSummary(view.summary);
+    setDivisionStatus(view.status);
+    setDivisionFailed(view.failed);
+    if (view.disableFirstDivision) {
+      firstDivisionAutoDisabled.current = true;
+      setQuestionConfigs((current) =>
+        current.map((item) =>
+          item.definitionId === "matching.first-division" ? { ...item, enabled: false } : item,
+        ),
+      );
+      return;
+    }
+    if (view.restoreFirstDivision && firstDivisionAutoDisabled.current) {
+      firstDivisionAutoDisabled.current = false;
+      setQuestionConfigs((current) =>
+        current.map((item) =>
+          item.definitionId === "matching.first-division" ? { ...item, enabled: true } : item,
+        ),
+      );
+    }
+  }
 
   useEffect(() => {
     void loadDatasetLibrary()
@@ -188,6 +214,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     if (!primaryLocation) {
       setDivisionLevel("");
       setDivisionCandidates([]);
+      setDivisionSummary("Choose an included area to load its subdivisions.");
       setDivisionStatus("Choose an included area to load its subdivisions.");
       setDivisionFailed(false);
       return;
@@ -197,24 +224,21 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     setDivisionLevel("");
     setDivisionCandidates([]);
     setDivisionFailed(false);
+    setDivisionSummary("Loading subdivision names…");
     setDivisionStatus("Loading subdivision names…");
 
     void discoverSubdivisionLevels(primaryLocation)
       .then((response) => {
         if (!active) return;
-        setDivisionCandidates(response.levels);
-        if (response.levels[0]) {
-          setDivisionLevel(response.levels[0].adminLevel);
-          setDivisionStatus(describeSubdivision(response.levels[0]));
-        } else {
-          setDivisionStatus("No child areas found. Disable First Division or choose another area.");
-        }
+        applySubdivisionView(subdivisionDiscoveryView({ kind: "loaded", levels: response.levels }));
       })
-      .catch(() => {
+      .catch((cause) => {
         if (!active) return;
-        setDivisionLevel("");
-        setDivisionFailed(true);
-        setDivisionStatus("Could not load child areas.");
+        applySubdivisionView(
+          subdivisionDiscoveryView(
+            cause instanceof Error ? { kind: "error", message: cause.message } : { kind: "error" },
+          ),
+        );
       });
 
     return () => {
@@ -227,20 +251,17 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     setDivisionLevel("");
     setDivisionCandidates([]);
     setDivisionFailed(false);
+    setDivisionSummary("Loading subdivision names…");
     setDivisionStatus("Loading subdivision names…");
     try {
       const response = await discoverSubdivisionLevels(primaryLocation);
-      setDivisionCandidates(response.levels);
-      if (response.levels[0]) {
-        setDivisionLevel(response.levels[0].adminLevel);
-        setDivisionStatus(describeSubdivision(response.levels[0]));
-      } else {
-        setDivisionStatus("No child areas found. Disable First Division or choose another area.");
-      }
-    } catch {
-      setDivisionLevel("");
-      setDivisionFailed(true);
-      setDivisionStatus("Could not load child areas.");
+      applySubdivisionView(subdivisionDiscoveryView({ kind: "loaded", levels: response.levels }));
+    } catch (cause) {
+      applySubdivisionView(
+        subdivisionDiscoveryView(
+          cause instanceof Error ? { kind: "error", message: cause.message } : { kind: "error" },
+        ),
+      );
     }
   }
 
@@ -521,7 +542,11 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
                     const value = Number(event.target.value);
                     setDivisionLevel(value);
                     const candidate = divisionCandidates.find((item) => item.adminLevel === value);
-                    if (candidate) setDivisionStatus(describeSubdivision(candidate));
+                    if (candidate) {
+                      const label = describeSubdivisionLevel(candidate);
+                      setDivisionSummary(label);
+                      setDivisionStatus(label);
+                    }
                   }}
                 >
                   {divisionCandidates.map((candidate) => (
@@ -536,14 +561,15 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
                 Areas used by First Division
                 <input
                   type="text"
-                  value={primaryLocation ? divisionStatus : "Choose an area first"}
+                  value={primaryLocation ? divisionSummary : "Choose an area first"}
                   disabled
                   readOnly
                 />
               </label>
             )}
           </div>
-          {divisionCandidates.length > 0 && <p className="field-help">{divisionStatus}</p>}
+          {(divisionCandidates.length > 0 || divisionFailed || !firstDivisionEnabled) &&
+            primaryLocation && <p className="field-help">{divisionStatus}</p>}
           {divisionFailed && primaryLocation && (
             <button
               type="button"
@@ -691,15 +717,18 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
                     <input
                       type="checkbox"
                       checked={config.enabled}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        if (definition.id === "matching.first-division") {
+                          firstDivisionAutoDisabled.current = false;
+                        }
                         setQuestionConfigs((current) =>
                           current.map((item) =>
                             item.definitionId === definition.id
                               ? { ...item, enabled: event.target.checked }
                               : item,
                           ),
-                        )
-                      }
+                        );
+                      }}
                     />
                     <span>
                       <strong>{definition.name}</strong>

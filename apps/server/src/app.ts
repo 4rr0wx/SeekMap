@@ -321,7 +321,13 @@ export async function buildApp(
       .object({
         osmType: z.enum(["relation", "way"]),
         osmId: z.string().min(1).max(40),
-        parentAdminLevel: z.number().int().min(2).max(12).nullable(),
+        // Nominatim occasionally returns admin levels outside the OSM 2–12 game range.
+        // Clamp those to null so setup stays usable instead of failing Zod validation.
+        parentAdminLevel: z
+          .number()
+          .int()
+          .nullable()
+          .transform((value) => (value === null || value < 2 || value > 12 ? null : value)),
       })
       .parse(request.body);
     return {
