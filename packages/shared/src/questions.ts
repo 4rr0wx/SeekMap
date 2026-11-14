@@ -1,5 +1,13 @@
 import * as turf from "@turf/turf";
-import type { FeatureCollection, Geometry, MultiPolygon, Polygon } from "geojson";
+import type {
+  FeatureCollection,
+  Geometry,
+  LineString,
+  MultiLineString,
+  MultiPolygon,
+  Point,
+  Polygon,
+} from "geojson";
 import type { z } from "zod";
 import {
   firstDivisionParametersSchema,
@@ -7,6 +15,7 @@ import {
   radarParametersSchema,
   tentacleQuestionParametersSchema,
   thermometerParametersSchema,
+  transitQuestionParametersSchema,
 } from "./schemas.js";
 import {
   findContainingArea,
@@ -25,6 +34,12 @@ import {
   tentaclePlaceRegion,
   tentaclesVisualizationFeatures,
 } from "./place-questions.js";
+import {
+  hasTransitLines,
+  requireTransitStations,
+  transitStationsAsPlaces,
+  transitStationVisualizationFeatures,
+} from "./transit-questions.js";
 import type {
   AreaFeature,
   DatasetCategory,
@@ -34,6 +49,7 @@ import type {
   QuestionCategory,
   QuestionConfig,
   RepeatCostRule,
+  TransitMode,
   UploadedDataset,
 } from "./types.js";
 
@@ -46,6 +62,9 @@ export interface QuestionContext {
   boundary: AreaFeature;
   subdivisions: FeatureCollection<Polygon | MultiPolygon> | null;
   datasets: UploadedDataset[];
+  transitStations?: FeatureCollection<Point> | null;
+  transitLines?: FeatureCollection<LineString | MultiLineString> | null;
+  transitModes?: TransitMode[];
 }
 
 export interface QuestionArtifacts {
@@ -368,6 +387,162 @@ const measuringPlaces: QuestionDefinition<z.infer<typeof placeQuestionParameters
   },
 };
 
+const matchingTransitStation: QuestionDefinition<z.infer<typeof transitQuestionParametersSchema>> =
+  {
+    id: "matching.transit-station",
+    category: "MATCHING",
+    name: "Matching: Transit Station",
+    description:
+      "Is the Hider's nearest in-boundary transit station the same as the Seeker's reference station?",
+    parameterKind: "POINT",
+    parametersSchema: transitQuestionParametersSchema,
+    answers: [
+      { value: "SAME", label: "Same" },
+      { value: "DIFFERENT", label: "Different" },
+    ],
+    baseCost: 1,
+    repeatRule: { type: "LINEAR", increment: 1 },
+    buildArtifacts(parameters, answer, context) {
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
+      const features = transitStationVisualizationFeatures(places, parameters.referencePoint);
+      const selected = nearestDatasetPlace(places, parameters.referencePoint, "webMercator");
+      if (!selected) {
+        throw new Error(
+          "No transit stations for the enabled modes are available inside the game boundary. Load transit data or enable matching modes before asking this question.",
+        );
+      }
+      const sameRegion = matchingPlaceRegion(context.boundary, places, selected);
+      const differentRegion = subtractArea(context.boundary, sameRegion);
+      const region = answer === "DIFFERENT" ? differentRegion : sameRegion;
+      if (answer && !region) throw new Error(`The ${answer.toLowerCase()} answer leaves no area`);
+      const area = {
+        ...(region ?? sameRegion),
+        properties: {
+          ...((region ?? sameRegion).properties ?? {}),
+          artifactRole: answer ? "answer-region" : "candidate-region",
+          answer,
+          seekerPlaceIndex: selected.index,
+          seekerPlaceName: selected.name,
+        },
+      } as MapFeature;
+      return {
+        visualization: turf.featureCollection([area, ...features]) as MapFeatureCollection,
+        effect: answer
+          ? {
+              mode: answer === "SAME" ? "INTERSECT" : "SUBTRACT",
+              geometry: sameRegion,
+            }
+          : null,
+      };
+    },
+  };
+
+const measuringTransitStation: QuestionDefinition<z.infer<typeof transitQuestionParametersSchema>> =
+  {
+    id: "measuring.transit-station",
+    category: "MEASURING",
+    name: "Measuring: Transit Station",
+    description:
+      "Compared with the Seeker, is the Hider closer to or further from their nearest transit station?",
+    parameterKind: "POINT",
+    parametersSchema: transitQuestionParametersSchema,
+    answers: [
+      { value: "CLOSER", label: "Closer" },
+      { value: "FURTHER", label: "Further" },
+    ],
+    baseCost: 1,
+    repeatRule: { type: "LINEAR", increment: 1 },
+    buildArtifacts(parameters, answer, context) {
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
+      const features = transitStationVisualizationFeatures(places, parameters.referencePoint);
+      const closer = measuringPlaceRegion(
+        context.boundary,
+        places,
+        parameters.referencePoint,
+        "CLOSER",
+      );
+      const selected = nearestDatasetPlace(places, parameters.referencePoint)!;
+      const answerRegion =
+        answer === "FURTHER"
+          ? measuringPlaceRegion(context.boundary, places, parameters.referencePoint, "FURTHER")
+              .region
+          : closer.region;
+      const area = {
+        ...answerRegion,
+        properties: {
+          ...(answerRegion.properties ?? {}),
+          artifactRole: answer ? "answer-region" : "candidate-region",
+          answer,
+          seekerPlaceIndex: selected.index,
+          seekerPlaceName: selected.name,
+          referenceDistanceMeters: closer.referenceDistanceMeters,
+        },
+      } as MapFeature;
+      return {
+        visualization: turf.featureCollection([area, ...features]) as MapFeatureCollection,
+        effect: answer
+          ? {
+              mode: answer === "CLOSER" ? "INTERSECT" : "SUBTRACT",
+              geometry: closer.region,
+            }
+          : null,
+      };
+    },
+  };
+
+const matchingTransitLine: QuestionDefinition<z.infer<typeof transitQuestionParametersSchema>> = {
+  id: "matching.transit-line",
+  category: "MATCHING",
+  name: "Matching: Transit Line",
+  description:
+    "Does the Hider share a transit line with the Seeker's reference? Exact line membership is still pending local OSM tagging review.",
+  parameterKind: "POINT",
+  parametersSchema: transitQuestionParametersSchema,
+  answers: [
+    { value: "SAME", label: "Same" },
+    { value: "DIFFERENT", label: "Different" },
+  ],
+  baseCost: 1,
+  repeatRule: { type: "LINEAR", increment: 1 },
+  exactRulePending: true,
+  buildArtifacts(parameters, answer, context) {
+    if (!hasTransitLines(context.transitLines)) {
+      if (answer) {
+        throw new Error(
+          "No transit lines are available for this game. Load transit data before asking this question.",
+        );
+      }
+      return { visualization: pointVisualization(parameters.referencePoint), effect: null };
+    }
+    const lineFeatures = (context.transitLines?.features ?? []).map((feature, index) => ({
+      ...feature,
+      properties: {
+        ...(feature.properties ?? {}),
+        artifactRole: "transit-line",
+        placeIndex: index,
+      },
+    })) as MapFeature[];
+    return {
+      visualization: turf.featureCollection([
+        turf.point(parameters.referencePoint, {
+          artifactRole: "seeker-reference",
+          label: "Seeker reference",
+        }),
+        ...lineFeatures,
+      ]) as MapFeatureCollection,
+      effect: null,
+    };
+  },
+};
+
 const tentaclesPlaces: QuestionDefinition<z.infer<typeof tentacleQuestionParametersSchema>> = {
   id: "tentacles.dataset",
   category: "TENTACLES",
@@ -483,7 +658,27 @@ export const QUESTION_DEFINITIONS: readonly QuestionDefinition[] = [
   tentaclesPlaces,
   matchingPlaces,
   measuringPlaces,
+  matchingTransitStation,
+  measuringTransitStation,
+  matchingTransitLine,
 ];
+
+/** Whether a transit-backed definition should appear in the composer for the current game. */
+export function isTransitQuestionAvailable(
+  definitionId: string,
+  context: Pick<QuestionContext, "boundary" | "transitStations" | "transitLines" | "transitModes">,
+): boolean {
+  if (definitionId === "matching.transit-station" || definitionId === "measuring.transit-station") {
+    return (
+      transitStationsAsPlaces(context.transitStations, context.boundary, context.transitModes)
+        .length > 0
+    );
+  }
+  if (definitionId === "matching.transit-line") {
+    return hasTransitLines(context.transitLines);
+  }
+  return true;
+}
 
 export interface LocalQuestionEvaluation {
   answer: string | null;
@@ -513,6 +708,27 @@ export function getQuestionReferenceInfo(
       const dataset = datasetFor(String(parameters.datasetId), context);
       const places = datasetPlaces(dataset, context.boundary);
       const metric = definitionId === "matching.dataset" ? "webMercator" : "geodesic";
+      const seeker = nearestDatasetPlace(
+        places,
+        parameters.referencePoint as [number, number],
+        metric,
+      );
+      if (!seeker) return null;
+      return {
+        placeName: seeker.name,
+        distanceMeters: seeker.distanceMeters,
+      };
+    }
+    if (
+      definitionId === "matching.transit-station" ||
+      definitionId === "measuring.transit-station"
+    ) {
+      const places = requireTransitStations(
+        context.transitStations,
+        context.boundary,
+        context.transitModes,
+      );
+      const metric = definitionId === "matching.transit-station" ? "webMercator" : "geodesic";
       const seeker = nearestDatasetPlace(
         places,
         parameters.referencePoint as [number, number],
@@ -672,6 +888,60 @@ export function evaluateQuestionAtPosition(
       summary: closer
         ? `You are closer to the nearest ${dataset.name} place than the Seeker.`
         : `You are further from the nearest ${dataset.name} place than the Seeker.`,
+      details: [
+        `Seeker: ${seeker.name} · ${formatMeters(seeker.distanceMeters)}`,
+        `You: ${hider.name} · ${formatMeters(hider.distanceMeters)}`,
+      ],
+    };
+  }
+  if (definitionId === "matching.transit-station" || definitionId === "measuring.transit-station") {
+    const places = requireTransitStations(
+      context.transitStations,
+      context.boundary,
+      context.transitModes,
+    );
+    const metric = definitionId === "matching.transit-station" ? "webMercator" : "geodesic";
+    const seeker = nearestDatasetPlace(
+      places,
+      parameters.referencePoint as [number, number],
+      metric,
+    );
+    if (!seeker) return null;
+    if (!position) {
+      if (definitionId === "matching.transit-station") {
+        return {
+          answer: null,
+          summary: "Location needed to check this answer.",
+          details: [`Seeker: ${seeker.name}`],
+        };
+      }
+      return {
+        answer: null,
+        summary: "Location needed to check this answer.",
+        details: [`Seeker: ${seeker.name} · ${formatMeters(seeker.distanceMeters)}`],
+      };
+    }
+    const hider = nearestDatasetPlace(places, position, metric);
+    if (!hider) return null;
+    if (definitionId === "matching.transit-station") {
+      const same = seeker.index === hider.index;
+      return {
+        answer: same ? "SAME" : "DIFFERENT",
+        summary: same
+          ? "Your nearest transit station is the same as the Seeker's."
+          : "Your nearest transit station is different from the Seeker's.",
+        details: [
+          `Seeker: ${seeker.name}`,
+          `You: ${hider.name} (${formatMeters(hider.distanceMeters)})`,
+        ],
+      };
+    }
+    const closer = hider.distanceMeters <= seeker.distanceMeters;
+    return {
+      answer: closer ? "CLOSER" : "FURTHER",
+      summary: closer
+        ? "You are closer to the nearest transit station than the Seeker."
+        : "You are further from the nearest transit station than the Seeker.",
       details: [
         `Seeker: ${seeker.name} · ${formatMeters(seeker.distanceMeters)}`,
         `You: ${hider.name} · ${formatMeters(hider.distanceMeters)}`,

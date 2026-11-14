@@ -18,6 +18,7 @@ The project takes its geographic question primitives and category vocabulary fro
 - Real geographic effects for Radar, Thermometer, and cached First Division Matching.
 - Data-driven usage counts and repeat costs.
 - Dataset-backed Matching and Measuring questions using the nearest in-boundary place represented by each imported feature's map point.
+- Transit Matching and Measuring questions that reuse cached in-boundary stations (and a tracking-only transit-line Matching extension until local OSM route tagging is verified).
 - Real Voronoi-partitioned Tentacles questions with configurable radius and candidate place selection.
 - Optional Hider Question Assistance.
 - Reusable, optional KML/KMZ library copied into each selected game and converted to stored GeoJSON.
@@ -101,6 +102,8 @@ When a Seeker starts a game with no selected dataset, the start panel offers a f
 
 Tentacles, Matching, and Measuring can each select any imported dataset. Matching compares whether the Hider and Seeker have the same nearest in-boundary place. Measuring compares each player's distance to their own nearest in-boundary place. Tentacles finds candidate places within a radius of the reference point, partitions the area using Voronoi cells, and asks which tentacle place the Hider is closest to (or outside the radius). Point features are used directly; other feature types use a representative point on the feature, matching the game's map-icon measurement convention.
 
+Transit Matching and Measuring reuse the game's already-cached OSM train/light-rail/subway/tram stations instead of a KML upload. Matching: Transit Station asks whether the Hider's nearest in-boundary station matches the Seeker's. Measuring: Transit Station compares each player's distance to their own nearest station against the Seeker's reference distance. These definitions appear in the composer only after transit stations are loaded; empty or missing transit data returns a clear error rather than a silent no-op. Matching: Transit Line is available as a tracking-only extension point (`exactRulePending`) until station-to-line membership can be verified from local OSM tagging. Stations remain display aids filtered by Possible Area on the map; area effects always recompute from Game Boundary plus enabled APPLIED questions.
+
 ## Development
 
 Requirements: Node.js 22–24 and pnpm 11.
@@ -147,6 +150,7 @@ This is not an application authentication system. Device tokens exist only to se
 
 - A game currently supports one OSM administrative area; composing adjacent areas such as Lower Austria plus Vienna is future work.
 - First Division and transit completeness depends on local OpenStreetMap tagging and the selected admin level.
+- Transit line Matching stays tracking-only until route-relation or equivalent station-to-line membership is reliable for the selected area.
 - Transit loading currently uses a bounding-box Overpass query and may be expensive for very large regions.
 - The optional OSM POI fallback uses bounded bounding-box cells before filtering against the exact game boundary; very large areas require curated datasets.
 - Public OSM tile/Nominatim/Overpass services should not be treated as an SLA-backed production dependency.

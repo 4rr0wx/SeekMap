@@ -432,6 +432,171 @@ describe("area geometry", () => {
     expect(measuringRefInfo?.placeName).toBe("West Golf Club");
   });
 
+  it("builds Matching and Measuring transit-station effects and rejects missing transit", () => {
+    const stations = turf.featureCollection([
+      turf.point([0.4, 1], { name: "Westbahnhof", railway: "station", station: "subway" }),
+      turf.point([1.6, 1], { name: "Ostbahnhof", railway: "station", station: "subway" }),
+      turf.point([1, 1.5], { name: "Tram Halt", railway: "tram_stop" }),
+    ]);
+    const lines = turf.featureCollection([
+      turf.lineString(
+        [
+          [0.4, 1],
+          [1.6, 1],
+        ],
+        { name: "U1", transitMode: "subway" },
+      ),
+    ]);
+    const context = {
+      boundary,
+      subdivisions: null,
+      datasets: [],
+      transitStations: stations,
+      transitLines: lines,
+      transitModes: ["subway" as const],
+    };
+    const parameters = { referencePoint: [0.3, 1] as [number, number] };
+
+    const same = buildQuestionArtifacts(
+      "matching.transit-station",
+      parameters,
+      "SAME",
+      context,
+    ).artifacts;
+    expect(same.effect).not.toBeNull();
+    expect(turf.booleanPointInPolygon(turf.point([0.2, 1]), same.effect!.geometry)).toBe(true);
+    expect(turf.booleanPointInPolygon(turf.point([1.8, 1]), same.effect!.geometry)).toBe(false);
+
+    const matchEvaluation = evaluateQuestionAtPosition(
+      "matching.transit-station",
+      parameters,
+      [1.8, 1],
+      context,
+    );
+    expect(matchEvaluation?.answer).toBe("DIFFERENT");
+    expect(matchEvaluation?.details.join(" ")).toContain("Ostbahnhof");
+
+    const matchWithoutLocation = evaluateQuestionAtPosition(
+      "matching.transit-station",
+      parameters,
+      null,
+      context,
+    );
+    expect(matchWithoutLocation?.answer).toBeNull();
+    expect(matchWithoutLocation?.details).toEqual(["Seeker: Westbahnhof"]);
+
+    const refInfo = getQuestionReferenceInfo("matching.transit-station", parameters, context);
+    expect(refInfo?.placeName).toBe("Westbahnhof");
+
+    const closer = buildQuestionArtifacts(
+      "measuring.transit-station",
+      parameters,
+      "CLOSER",
+      context,
+    ).artifacts;
+    expect(closer.effect).not.toBeNull();
+    const measuringEvaluation = evaluateQuestionAtPosition(
+      "measuring.transit-station",
+      parameters,
+      [0.39, 1],
+      context,
+    );
+    expect(measuringEvaluation?.answer).toBe("CLOSER");
+
+    const multi = turf.multiPolygon([
+      (boundary.geometry as Polygon).coordinates,
+      [
+        [
+          [3, 0],
+          [4, 0],
+          [4, 1],
+          [3, 1],
+          [3, 0],
+        ],
+      ],
+    ]) as AreaFeature;
+    const multiStations = turf.featureCollection([
+      turf.point([0.5, 0.5], { name: "Central", railway: "station", station: "subway" }),
+      turf.point([3.5, 0.5], { name: "East Island", railway: "station", station: "subway" }),
+    ]);
+    const multiSame = buildQuestionArtifacts(
+      "matching.transit-station",
+      { referencePoint: [0.4, 0.5] },
+      "SAME",
+      {
+        ...context,
+        boundary: multi,
+        transitStations: multiStations,
+      },
+    ).artifacts;
+    expect(multiSame.effect?.geometry.geometry.type).toMatch(/Polygon/);
+    expect(turf.booleanPointInPolygon(turf.point([0.45, 0.5]), multiSame.effect!.geometry)).toBe(
+      true,
+    );
+    expect(turf.booleanPointInPolygon(turf.point([3.5, 0.5]), multiSame.effect!.geometry)).toBe(
+      false,
+    );
+
+    // Subway-only games must ignore tram stops even when they are nearer.
+    const subwayOnlyNearTram = buildQuestionArtifacts(
+      "matching.transit-station",
+      { referencePoint: [1, 1.4] },
+      "SAME",
+      context,
+    ).artifacts;
+    expect(
+      subwayOnlyNearTram.visualization?.type === "FeatureCollection" &&
+        subwayOnlyNearTram.visualization.features.some(
+          (feature) => feature.properties?.seekerPlaceName === "Tram Halt",
+        ),
+    ).toBe(false);
+
+    expect(() =>
+      buildQuestionArtifacts("matching.transit-station", parameters, "SAME", {
+        boundary,
+        subdivisions: null,
+        datasets: [],
+        transitStations: null,
+      }),
+    ).toThrow(/No transit stations/);
+
+    expect(() =>
+      buildQuestionArtifacts("measuring.transit-station", parameters, "CLOSER", {
+        boundary,
+        subdivisions: null,
+        datasets: [],
+        transitStations: turf.featureCollection([]),
+      }),
+    ).toThrow(/No transit stations/);
+
+    expect(() =>
+      buildQuestionArtifacts("matching.transit-station", { referencePoint: [1, 1.4] }, "SAME", {
+        ...context,
+        transitModes: ["tram"],
+        transitStations: turf.featureCollection([
+          turf.point([0.4, 1], { name: "Westbahnhof", railway: "station", station: "subway" }),
+        ]),
+      }),
+    ).toThrow(/enabled modes/);
+
+    const pendingLine = buildQuestionArtifacts(
+      "matching.transit-line",
+      parameters,
+      null,
+      context,
+    ).artifacts;
+    expect(pendingLine.effect).toBeNull();
+    expect(getQuestionDefinition("matching.transit-line").exactRulePending).toBe(true);
+
+    const answeredPending = buildQuestionArtifacts(
+      "matching.transit-line",
+      parameters,
+      "SAME",
+      context,
+    ).artifacts;
+    expect(answeredPending.effect).toBeNull();
+  });
+
   it("builds Tentacles Voronoi cells, radius exclusion, and local Hider evaluation", () => {
     const attractions: UploadedDataset = {
       id: "22222222-2222-4222-8222-222222222222",

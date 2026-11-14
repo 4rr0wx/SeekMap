@@ -157,8 +157,67 @@ describe("OSM transit normalization", () => {
       expect(result.lines.features[0]?.properties?.transitMode).toBe("train");
       expect(result.stations.features).toHaveLength(1);
       expect(result.stations.features[0]?.properties?.name).toBe("Central");
+      expect(result.stations.features[0]?.properties?.transitMode).toBe("train");
+      expect(result.stations.features[0]?.properties?.transitModes).toEqual(["train"]);
       expect(decodeURIComponent(requestBody)).toContain('way["railway"~"^(rail)$"]');
       expect(requestBody).not.toContain("bus");
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
+  it("tags stations from OSM mode flags and nearby lines, dropping disabled modes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            version: 0.6,
+            elements: [
+              {
+                type: "node",
+                id: 1,
+                lat: 48.2,
+                lon: 16.3,
+                tags: { name: "U-Bahn", railway: "station", station: "subway" },
+              },
+              {
+                type: "node",
+                id: 2,
+                lat: 48.201,
+                lon: 16.301,
+                tags: { name: "Tram Stop", railway: "tram_stop" },
+              },
+              {
+                type: "way",
+                id: 10,
+                nodes: [1, 2],
+                geometry: [
+                  { lat: 48.2, lon: 16.3 },
+                  { lat: 48.21, lon: 16.31 },
+                ],
+                tags: { name: "U1", railway: "subway" },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+    const database = openDatabase(":memory:");
+    try {
+      const service = new OsmService(database.db, loadConfig());
+      const subwayOnly = await service.transit([16.2, 48.1, 16.4, 48.3], ["subway"]);
+      expect(subwayOnly.stations.features.map((feature) => feature.properties?.name)).toEqual([
+        "U-Bahn",
+      ]);
+      expect(subwayOnly.stations.features[0]?.properties?.transitModes).toContain("subway");
+
+      const withTram = await service.transit([16.2, 48.1, 16.4, 48.3], ["subway", "tram"]);
+      expect(withTram.stations.features.map((feature) => feature.properties?.name).sort()).toEqual([
+        "Tram Stop",
+        "U-Bahn",
+      ]);
     } finally {
       database.sqlite.close();
     }

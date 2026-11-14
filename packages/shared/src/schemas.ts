@@ -101,6 +101,11 @@ export const firstDivisionParametersSchema = z.object({
   referencePoint: positionSchema,
 });
 
+export const transitQuestionParametersSchema = z.object({
+  referencePoint: positionSchema,
+  note: z.string().trim().max(500).optional(),
+});
+
 export const datasetQuestionParametersSchema = z.object({
   referencePoint: positionSchema.optional(),
   datasetId: z.string().uuid().optional(),
