@@ -101,6 +101,8 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     setDivisionSummary(view.summary);
     setDivisionStatus(view.status);
     setDivisionFailed(view.failed);
+    if (view.banner) onError(view.banner);
+    else onError(null);
     if (view.disableFirstDivision) {
       firstDivisionAutoDisabled.current = true;
       setQuestionConfigs((current) =>
@@ -226,6 +228,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     setDivisionFailed(false);
     setDivisionSummary("Loading subdivision names…");
     setDivisionStatus("Loading subdivision names…");
+    onError(null);
 
     void discoverSubdivisionLevels(primaryLocation)
       .then((response) => {
@@ -253,6 +256,7 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
     setDivisionFailed(false);
     setDivisionSummary("Loading subdivision names…");
     setDivisionStatus("Loading subdivision names…");
+    onError(null);
     try {
       const response = await discoverSubdivisionLevels(primaryLocation);
       applySubdivisionView(subdivisionDiscoveryView({ kind: "loaded", levels: response.levels }));
@@ -568,8 +572,17 @@ export function NewGameScreen({ config, onCreated, onError }: NewGameProps) {
               </label>
             )}
           </div>
-          {(divisionCandidates.length > 0 || divisionFailed || !firstDivisionEnabled) &&
-            primaryLocation && <p className="field-help">{divisionStatus}</p>}
+          {divisionCandidates.length > 0 && primaryLocation && (
+            <p className="field-help">{divisionStatus}</p>
+          )}
+          {(divisionFailed ||
+            (primaryLocation && !firstDivisionEnabled && divisionCandidates.length === 0)) &&
+            primaryLocation && (
+              <div className="boundary-warning" role="alert">
+                <AlertTriangle size={18} />
+                <span>{divisionStatus}</span>
+              </div>
+            )}
           {divisionFailed && primaryLocation && (
             <button
               type="button"

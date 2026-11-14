@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { subdivisionDiscoveryView } from "./subdivisionSetup";
+import { explainSubdivisionLoadFailure, subdivisionDiscoveryView } from "./subdivisionSetup";
 
 describe("subdivisionDiscoveryView", () => {
   it("selects the first loaded admin level and allows restoring First Division", () => {
@@ -19,6 +19,7 @@ describe("subdivisionDiscoveryView", () => {
       ],
       summary: "2 areas: North, South",
       status: "2 areas: North, South",
+      banner: null,
       failed: false,
       disableFirstDivision: false,
       restoreFirstDivision: true,
@@ -30,13 +31,14 @@ describe("subdivisionDiscoveryView", () => {
       divisionLevel: "",
       candidates: [],
       summary: "No child areas found",
+      banner: expect.stringContaining("No child areas found"),
       failed: false,
       disableFirstDivision: true,
       restoreFirstDivision: false,
     });
   });
 
-  it("disables First Division on Overpass failures and keeps the API error visible", () => {
+  it("disables First Division on Overpass failures and explains the outage", () => {
     expect(
       subdivisionDiscoveryView({
         kind: "error",
@@ -45,11 +47,21 @@ describe("subdivisionDiscoveryView", () => {
     ).toMatchObject({
       divisionLevel: "",
       candidates: [],
-      summary: "OpenStreetMap service returned 504",
+      summary: "OpenStreetMap Overpass is unavailable",
       failed: true,
       disableFirstDivision: true,
       restoreFirstDivision: false,
-      status: expect.stringContaining("OpenStreetMap service returned 504"),
+      status: expect.stringContaining("temporarily overloaded"),
+      banner: expect.stringContaining("Overpass is temporarily unavailable"),
+    });
+  });
+});
+
+describe("explainSubdivisionLoadFailure", () => {
+  it("maps Overpass capacity errors to an actionable banner", () => {
+    expect(explainSubdivisionLoadFailure("OpenStreetMap service is unavailable")).toMatchObject({
+      summary: "OpenStreetMap Overpass is unavailable",
+      banner: expect.stringContaining("temporarily unavailable"),
     });
   });
 });
