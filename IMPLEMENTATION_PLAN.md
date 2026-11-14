@@ -134,7 +134,7 @@ The creation screen accepts an optional multi-file selection of `.kml` and `.kmz
 
 ## Docker Compose deployment
 
-The multi-stage Dockerfile installs the pnpm workspace, runs typecheck/tests/build in CI or explicitly during verification, builds web and server artifacts, then copies only production dependencies/artifacts into a Node 24 slim image. Fastify serves `/app/public` and the API/Socket.IO endpoint from one port. Compose publishes `${PORT:-3000}`, mounts a named volume at `${DATA_DIR:-/data}`, sets a restart policy, and checks `/api/health`. The server trusts standard forwarded headers and uses relative same-origin URLs, so a normal HTTPS reverse proxy only needs WebSocket upgrade support and no path rewriting.
+The multi-stage Dockerfile installs the pnpm workspace, runs typecheck/tests/build in CI or explicitly during verification, builds web and server artifacts, then copies only production dependencies/artifacts into a Node 24 slim image. Fastify serves `/app/public` and the API/Socket.IO endpoint from one port. Compose publishes `${PORT:-3030}`, mounts a named volume at `${DATA_DIR:-/data}`, sets a restart policy, and checks `/api/health`. The server trusts standard forwarded headers and uses relative same-origin URLs, so a normal HTTPS reverse proxy only needs WebSocket upgrade support and no path rewriting.
 
 ## Implementation milestones
 

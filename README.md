@@ -57,7 +57,7 @@ Authentication is deliberately outside the application; protect the entire origi
 
 | Variable               | Default                        | Purpose                                                   |
 | ---------------------- | ------------------------------ | --------------------------------------------------------- |
-| `PORT`                 | `3000`                         | Application HTTP port.                                    |
+| `PORT`                 | `3030`                         | Application HTTP port.                                    |
 | `HOST`                 | `0.0.0.0`                      | Listen address.                                           |
 | `PUBLIC_APP_URL`       | empty                          | Public HTTPS URL, used in the OSM User-Agent description. |
 | `DATA_DIR`             | `/data` in Docker              | Directory containing the SQLite database.                 |

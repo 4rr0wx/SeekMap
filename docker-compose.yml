@@ -5,7 +5,7 @@ services:
     image: hideseek-atlas:local
     restart: unless-stopped
     environment:
-      PORT: ${PORT:-3000}
+      PORT: ${PORT:-3030}
       HOST: 0.0.0.0
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
       DATA_DIR: /data
@@ -17,7 +17,7 @@ services:
       MAX_KML_BYTES: ${MAX_KML_BYTES:-5242880}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${PORT:-3050}:${PORT:-3050}"
+      - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - hideseek_data:/data
     healthcheck:
@@ -26,7 +26,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||3030)+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s

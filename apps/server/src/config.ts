@@ -39,7 +39,7 @@ export function loadConfig(environment = process.env): AppConfig {
   const overpassSource = environment.OVERPASS_URLS?.trim() || environment.OVERPASS_URL || undefined;
   const overpassUrls = parseUrlList(overpassSource, "https://overpass-api.de/api/interpreter");
   return {
-    port: positiveInt(environment.PORT, 3000),
+    port: positiveInt(environment.PORT, 3030),
     host: environment.HOST ?? "0.0.0.0",
     publicUrl: environment.PUBLIC_APP_URL || null,
     dataDirectory,
